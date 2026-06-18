@@ -86,6 +86,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -150,6 +152,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -221,8 +225,13 @@ describe("createTelegramController media message behavior", () => {
           sent.push(text);
           return transportSendText();
         },
+        sendRichText: async (_chatId, markdown) => {
+          sent.push(markdown);
+          return [{ message_id: 1 }];
+        },
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
+        editRichText: async () => undefined,
         editButtons: async () => undefined,
         answerCallbackQuery: async () => undefined,
         deleteMessage: async () => undefined,
@@ -297,6 +306,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -376,6 +387,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText,
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -468,6 +481,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -550,6 +565,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -625,6 +642,8 @@ describe("createTelegramController media message behavior", () => {
       transport: {
         removeInlineKeyboard: async () => undefined,
         sendText: async () => [{ message_id: 1 }],
+        sendRichText: async () => [{ message_id: 1 }],
+        editRichText: async () => undefined,
         sendButtons: async () => ({ message_id: 1 }),
         editText: async () => undefined,
         editButtons: async () => undefined,
@@ -677,6 +696,8 @@ describe("createTelegramController media message behavior", () => {
     const transport = {
       removeInlineKeyboard: vi.fn(async () => undefined),
       sendText: vi.fn(async () => [] as any),
+      sendRichText: vi.fn(async () => [] as any),
+      editRichText: vi.fn(async () => undefined),
       sendButtons: vi.fn(async () => ({ message_id: sentMessageId } as any)),
       editText: vi.fn(async () => undefined),
       editButtons: vi.fn(async () => undefined),

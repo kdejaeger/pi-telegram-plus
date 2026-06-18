@@ -19,8 +19,13 @@ describe("tg attachment tool and queue sender", () => {
       calls.push(`text:${chatId}:${message}`);
       return [{ message_id: 1 }];
     },
+    sendRichText: async (chatId, markdown) => {
+      calls.push(`rich:${chatId}:${markdown}`);
+      return [{ message_id: 1 }];
+    },
     sendButtons: async () => ({ message_id: 1 }),
     editText: async () => undefined,
+    editRichText: async () => undefined,
     editButtons: async () => undefined,
     answerCallbackQuery: async () => undefined,
     deleteMessage: async () => undefined,

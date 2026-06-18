@@ -18,6 +18,7 @@ export type TelegramCommandDeps = {
   syncTelegramCommands: () => Promise<void>;
   startStatusHeartbeat: () => void;
   clearStatusError: () => void;
+  getCommands: () => Array<{ name: string; description?: string }>;
 };
 
 /** Shared "connect and start" sequence used by both /tg-setup and /tg-connect. */
@@ -157,6 +158,44 @@ export function registerTelegramCommands(
           : ["none"]),
       ];
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  // ── /commands ──────────────────────────────────────────────────────────
+  registry.registerCommand("commands", {
+    description: "Search or browse available commands. Add a search term to filter.",
+    handler: async (args, ctx) => {
+
+      const chatId: number | undefined = typeof (ctx.ui as Record<string, unknown>)?.chatId === "number"
+        ? (ctx.ui as Record<string, unknown>).chatId as number
+        : deps.getConfig().activeChatId;
+      if (!chatId) {
+        ctx.ui.notify("No active Telegram chat.", "error");
+        return;
+      }
+
+      const filter = (args ?? "").trim().toLowerCase();
+
+      const allCommands = deps.getCommands()
+        .filter((c) => c.description)
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const matching = filter
+        ? allCommands.filter((c) => c.name.toLowerCase().includes(filter))
+        : allCommands;
+
+      if (matching.length === 0) {
+        await deps.transport.sendText(chatId, `No commands match <code>${escapeHtml(filter)}</code>.`);
+        return;
+      }
+
+      const lines = [];
+      for (const cmd of matching) {
+        const raw = cmd.description ?? "";
+        const desc = escapeHtml(raw.length > 200 ? raw.slice(0, 197) + "..." : raw);
+        lines.push(`🔹 <code>/${cmd.name}</code> — ${desc}`);
+      }
+      await deps.transport.sendText(chatId, lines.join("\n"));
     },
   });
 }

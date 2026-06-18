@@ -1,43 +1,39 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setTelegramMyCommands } from "./telegram-api.ts";
 
+/** Commands that should NOT appear in the Telegram bot menu, but remain available in the TUI/terminal. */
+const TELEGRAM_EXCLUDED_COMMANDS = new Set([
+  "tg-connect",
+  "tg-disconnect",
+  "tg-setup",
+  "tg-config",
+]);
+
 const TELEGRAM_MENU_COMMANDS: Array<{ command: string; description: string }> = [
-  // Keep the built-in pi commands in the same order as the TUI slash menu.
-  { command: "login", description: "Configure provider authentication" },
-  { command: "logout", description: "Remove stored credentials" },
-  { command: "model", description: "Show or change the current model" },
-  { command: "scoped-models", description: "Enable/disable models for cycling" },
-  { command: "settings", description: "Open settings menu" },
-  { command: "resume", description: "Resume a previous session" },
+  { command: "commands", description: "Browse available commands, add search term to filter." },
+  { command: "scoped-models", description: "Choose a scoped model" },
+  { command: "thinking", description: "Change thinking level" },
+  { command: "stop", description: "Stop the current agent turn" },
+  { command: "model", description: "Choose a model" },
+
+  // 💬 Session management
   { command: "new", description: "Start a new session" },
-  { command: "name", description: "Set or show session name" },
   { command: "session", description: "Show session statistics" },
-  { command: "tree", description: "Navigate session tree" },
-  { command: "fork", description: "Fork from a previous message" },
-  { command: "clone", description: "Clone at a previous message" },
+  { command: "resume", description: "Resume a previous session" },
+  { command: "name", description: "Set or show session name" },
   { command: "compact", description: "Compact session context" },
   { command: "copy", description: "Copy last assistant message" },
-  { command: "export", description: "Export session" },
-  { command: "share", description: "Share session as gist" },
+  { command: "fork", description: "Fork from a previous message" },
+  { command: "clone", description: "Clone at a previous message" },
   { command: "reload", description: "Reload pi resources" },
-  { command: "hotkeys", description: "Show keyboard shortcuts" },
-  { command: "changelog", description: "Show changelog" },
-  { command: "quit", description: "Shut down pi" },
 
-  // Additional pi-telegram-plus commands.
-  { command: "cwd", description: "Show current working directory" },
-  { command: "cd", description: "Switch pi working directory" },
-  { command: "import", description: "Import a session" },
-  { command: "thinking", description: "Show or change thinking level" },
-  { command: "stop", description: "Stop the current agent turn" },
-  { command: "debug", description: "Show debug information" },
-  // tg-* commands visible in the Telegram bot menu.
-  // tg-bind-cwd / tg-unbind-cwd are workspace-management commands that
-  // require local cwd context and do not belong in the bot command list.
-  { command: "tg-setup", description: "Configure Telegram bot token" },
-  { command: "tg-connect", description: "Enable/start Telegram connection" },
-  { command: "tg-disconnect", description: "Disable/stop Telegram connection" },
+  // ⚙️ Settings & Telegram management
+  { command: "settings", description: "Open settings menu" },
   { command: "tg-config", description: "Configure Telegram message rendering" },
+
+  // ℹ️ Info & diagnostics
+  { command: "debug", description: "Show debug information" },
+  { command: "cwd", description: "Show current working directory" },
   { command: "tg-list", description: "List Telegram bot bindings" },
 ];
 
@@ -57,7 +53,11 @@ export function buildTelegramMenuCommands(pi: ExtensionAPI): Array<{ command: st
   };
 
   for (const command of TELEGRAM_MENU_COMMANDS) addCommand(command.command, command.description);
-  for (const command of pi.getCommands()) addCommand(command.name, command.description);
+  for (const command of pi.getCommands()) {
+    if (!TELEGRAM_EXCLUDED_COMMANDS.has(command.name)) {
+      addCommand(command.name, command.description);
+    }
+  }
 
   // Telegram accepts at most 100 bot commands. Keep the curated built-in-style
   // commands first, then fill the rest with extension/prompt/skill commands.

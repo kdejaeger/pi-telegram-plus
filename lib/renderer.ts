@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { escapeHtml } from "./html.ts";
-import { markdownToTelegramHtml } from "./markdown.ts";
 import type { TelegramConfig, TelegramRenderLevel, TelegramTransport, TelegramTurn } from "./types.ts";
 import { RENDER_LEVELS } from "./types.ts";
 
@@ -14,7 +13,6 @@ type AnyMessage = {
 };
 
 const TOOL_UPDATE_MS = 5000;
-const EDIT_LIMIT = 3500;
 
 function formatThinkingInline(part: Record<string, any>, level: TelegramRenderLevel): string {
   if (level === "hidden") return "";
@@ -165,30 +163,54 @@ export function registerTelegramRenderer(
     return [await deps.transport.sendText(chatIds[0], html)];
   };
 
-  const sendToTurn = async (html: string, options: { final?: boolean } = {}) => {
+  // Shared send-to-turn with content-type awareness.
+  // isHtml=true → use sendText/editText (HTML-parse_mode path)
+  // isHtml=false → use sendRichText/editRichText (Rich Message API markdown path)
+  const sendContentToTurn = async (content: string, isHtml: boolean) => {
+    const transport = deps.transport;
     const turn = deps.getActiveTurn();
+
     if (!turn) {
-      await send(html);
+      if (isHtml) {
+        await send(content);
+        return;
+      }
+      const chatIds = currentChats();
+      if (chatIds.length === 0) return;
+      await transport.sendRichText(chatIds[0], content);
       return;
     }
+
     if (turn.replaceMessageId === undefined) {
-      await deps.transport.sendText(turn.chatId, html);
+      if (isHtml) {
+        await transport.sendText(turn.chatId, content);
+      } else {
+        await transport.sendRichText(turn.chatId, content);
+      }
       return;
     }
-    if (options.final && Buffer.byteLength(html, "utf8") > EDIT_LIMIT) {
-      await deps.transport.editText(turn.chatId, turn.replaceMessageId, "🤖 <b>Assistant</b>\n\nFinal answer follows in separate message(s).").catch(() => undefined);
-      turn.replaceMessageId = undefined;
-      await deps.transport.sendText(turn.chatId, html);
-      return;
-    }
+
     try {
-      await deps.transport.editText(turn.chatId, turn.replaceMessageId, html);
+      if (isHtml) {
+        await transport.editText(turn.chatId, turn.replaceMessageId, content);
+      } else {
+        await transport.editRichText(turn.chatId, turn.replaceMessageId, content);
+      }
     } catch {
-      // Edit failed (message deleted / too many edits). Fall back to a new message.
       turn.replaceMessageId = undefined;
-      await deps.transport.sendText(turn.chatId, html);
+      if (isHtml) {
+        await transport.sendText(turn.chatId, content);
+      } else {
+        await transport.sendRichText(turn.chatId, content);
+      }
     }
   };
+
+  // Send HTML (for inline events / system messages)
+  const sendToTurn = (html: string) => sendContentToTurn(html, true);
+
+  // Send Rich Markdown (for assistant replies via Rich Message API)
+  const sendRichToTurn = (markdown: string) => sendContentToTurn(markdown, false);
 
   const sendInlineEvent = async (event: string) => {
     if (!event || sentInlineEvents.has(event)) return;
@@ -206,7 +228,10 @@ export function registerTelegramRenderer(
     toolUpdateAt.clear();
     const turn = deps.getActiveTurn();
     if (!turn) return;
-    if (turn.replaceMessageId !== undefined) await deps.transport.editText(turn.chatId, turn.replaceMessageId, "🤖 <b>Working…</b>");
+    if (turn.replaceMessageId !== undefined) {
+      try { await deps.transport.editText(turn.chatId, turn.replaceMessageId, "🤖 <b>Working…</b>"); }
+      catch { /* message may have been deleted — best-effort */ }
+    }
   });
 
   pi.on("tool_execution_start", async (event) => {
@@ -215,8 +240,7 @@ export function registerTelegramRenderer(
     toolArgs.set(event.toolCallId, event.args);
     const inline = level === "brief"
       ? formatToolBrief(event.toolName, event.args)
-      : `🔧 ${event.toolName} started
-${stringifyShort(event.args, 1200)}`;
+      : `🔧 ${event.toolName} started\n${stringifyShort(event.args, 1200)}`;
     await sendInlineEvent(inline);
   });
 
@@ -229,8 +253,7 @@ ${stringifyShort(event.args, 1200)}`;
     toolUpdateAt.set(event.toolCallId, now);
     const partial = stringifyShort(event.partialResult, 700);
     if (!partial || partial === "{}") return;
-    await sendInlineEvent(`🔄 ${event.toolName} update
-${partial}`);
+    await sendInlineEvent(`🔄 ${event.toolName} update\n${partial}`);
   });
 
   pi.on("tool_execution_end", async (event) => {
@@ -239,16 +262,14 @@ ${partial}`);
     const args = toolArgs.get(event.toolCallId);
     toolArgs.delete(event.toolCallId);
     if (level === "hidden") return;
-    const status = event.isError ? "❌ Tool failed" : "✅ Tool finished";
     const result = stringifyShort(event.result, event.isError ? 1800 : 900);
     if (level === "brief") {
       if (!event.isError) return;
       await sendInlineEvent(formatToolFailureBrief(event.toolName, event.result, args));
     } else {
       await sendInlineEvent(result && result !== "{}"
-        ? `${status}: ${event.toolName}
-${result}`
-        : `${status}: ${event.toolName}`);
+        ? `${event.isError ? "❌ Tool failed" : "✅ Tool finished"}: ${event.toolName}\n${result}`
+        : `${event.isError ? "❌ Tool failed" : "✅ Tool finished"}: ${event.toolName}`);
     }
   });
 
@@ -263,8 +284,7 @@ ${result}`
     const body = rendered.body || message.errorMessage || "";
     const images = contentImages(message.content);
 
-    const hasBody = body.trim().length > 0;
-    if (hasBody) await sendToTurn(markdownToTelegramHtml(body), { final: true });
+    if (body.trim().length > 0) await sendRichToTurn(body);
 
     const turn = deps.getActiveTurn();
     for (const image of images) {
@@ -274,9 +294,10 @@ ${result}`
         await deps.transport.sendPhoto(chatId, image.data, "image").catch(() => deps.transport.sendText(chatId, "[image output could not be sent]"));
       }
     }
-    if (!hasBody && turn?.replaceMessageId !== undefined && images.length > 0) {
+    if (!body.trim() && turn?.replaceMessageId !== undefined && images.length > 0) {
       const noun = `${images.length} image${images.length === 1 ? "" : "s"}`;
-      await deps.transport.editText(turn.chatId, turn.replaceMessageId, `✅ <b>Output sent.</b>\n${noun}`);
+      try { await deps.transport.editText(turn.chatId, turn.replaceMessageId, `✅ <b>Output sent.</b>\n${noun}`); }
+      catch { /* message may have been deleted — best-effort */ }
       turn.replaceMessageId = undefined;
     }
   });

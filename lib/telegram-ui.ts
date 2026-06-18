@@ -66,8 +66,14 @@ export function createTelegramUiRuntime(deps: {
   const sendOrReplaceText = async (chatId: number, text: string, flowId?: string) => {
     const replaceId = getReplaceIdForFlow(chatId, flowId);
     if (replaceId !== undefined) {
-      await deps.transport.editText(chatId, replaceId, text);
-      return { message_id: replaceId };
+      try {
+        await deps.transport.editText(chatId, replaceId, text);
+        return { message_id: replaceId };
+      } catch {
+        // edit failed (message deleted?) — fall back to sending fresh
+        const [sent] = await deps.transport.sendText(chatId, text);
+        return sent;
+      }
     }
     const [sent] = await deps.transport.sendText(chatId, text);
     return sent;

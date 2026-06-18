@@ -127,7 +127,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     "tg-bind-cwd", "tg-unbind-cwd", "tg-list",
     // other pi-telegram-plus custom commands (TUI-only command list excludes /import, which is now
     // a built-in pi command; keep Telegram handler registration only.
-    "cwd", "cd", "thinking", "stop", "debug",
+    "cwd", "cd", "thinking", "stop", "debug", "commands",
   ]);
 
   registerAllCommands({
@@ -159,6 +159,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     syncTelegramCommands: () => syncTelegramCommands(config.botToken, pi),
     startStatusHeartbeat: () => heartbeat.startStatusHeartbeat(refreshStatus),
     clearStatusError: () => { lastStatusError = undefined; },
+    getCommands: () => pi.getCommands(),
   });
 
   registerTelegramAttachmentTool(pi, {
@@ -299,7 +300,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
 
   runtimeState.dispose = disposeRuntime;
 
-  pi.on("session_start", async () => {
+  const loadConfigAndSync = async () => {
     try {
       switchResolvedConfig(await readResolvedTelegramConfig(currentSessionCwd()));
     } catch (error) {
@@ -308,6 +309,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
         `Telegram config is not v2 yet. Run /tg-setup to recreate it. ${error instanceof Error ? error.message : String(error)}`,
         "error",
       );
+      return;
     }
     if (config.botToken && !config.botUsername) {
       try {
@@ -323,7 +325,13 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     lastStatusError = undefined;
     heartbeat.startStatusHeartbeat(refreshStatus);
     refreshStatus();
-  });
+  };
+
+  pi.on("session_start", loadConfigAndSync);
+
+  // Also run after /reload (session_start doesn't fire again, but extension
+  // init does). Skip on initial load — session_start handles it.
+  if (getActiveSession()) loadConfigAndSync();
 
   pi.on("session_shutdown", () => {
     disposeRuntime();

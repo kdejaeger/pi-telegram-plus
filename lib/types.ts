@@ -110,12 +110,14 @@ export type TelegramTurn = {
 export type TelegramTransport = {
   removeInlineKeyboard(chatId: number, messageId: number): Promise<void>;
   sendText(chatId: number, text: string): Promise<TelegramSentMessage[]>;
+  sendRichText(chatId: number, markdown: string): Promise<TelegramSentMessage[]>;
   sendButtons(
     chatId: number,
     text: string,
     rows: TelegramButton[][],
   ): Promise<TelegramSentMessage>;
   editText(chatId: number, messageId: number, text: string): Promise<void>;
+  editRichText(chatId: number, messageId: number, markdown: string): Promise<void>;
   editButtons(chatId: number, messageId: number, text: string, rows: TelegramButton[][]): Promise<void>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
   deleteMessage(chatId: number, messageId: number): Promise<void>;

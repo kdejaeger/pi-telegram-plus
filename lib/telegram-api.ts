@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { TelegramButton, TelegramConfig, TelegramSentMessage, TelegramTransport, TelegramUpdate } from "./types.ts";
-import { stripHtml, splitTelegramText } from "./text-split.ts";
+import { splitTelegramText } from "./text-split.ts";
 
 type TelegramFileInfo = {
   file_id: string;
@@ -135,19 +135,22 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
     async sendText(chatId, text) {
       const sent: TelegramSentMessage[] = [];
       for (const chunk of splitTelegramText(text)) {
-        const body = {
+        const msg = await callApi<TelegramSentMessage>("sendMessage", {
           chat_id: chatId,
           text: chunk,
           parse_mode: "HTML",
-        };
-        const msg = await callApi<TelegramSentMessage>("sendMessage", body)
-          .catch(() => callApi<TelegramSentMessage>("sendMessage", {
-            chat_id: chatId,
-            text: stripHtml(chunk),
-          }));
+        });
         sent.push(msg);
       }
       return sent;
+    },
+
+    async sendRichText(chatId, markdown) {
+      const msg = await callApi<TelegramSentMessage>("sendRichMessage", {
+        chat_id: chatId,
+        rich_message: { markdown, skip_entity_detection: true },
+      });
+      return [msg];
     },
 
     async sendButtons(chatId, text, rows) {
@@ -160,11 +163,7 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         text: first,
         parse_mode: "HTML",
         reply_markup,
-      }).catch(() => callApi<TelegramSentMessage>("sendMessage", {
-        chat_id: chatId,
-        text: stripHtml(first),
-        reply_markup,
-      }));
+      });
     },
 
     async editText(chatId, messageId, text) {
@@ -174,11 +173,15 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         message_id: messageId,
         text: first,
         parse_mode: "HTML",
-      }).catch(() => callApi("editMessageText", {
+      });
+    },
+
+    async editRichText(chatId, messageId, markdown) {
+      await callApi("editMessageText", {
         chat_id: chatId,
         message_id: messageId,
-        text: stripHtml(first),
-      }).catch(() => undefined));
+        rich_message: { markdown, skip_entity_detection: true },
+      });
     },
 
     async editButtons(chatId, messageId, text, rows) {
@@ -190,12 +193,7 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         text: first,
         parse_mode: "HTML",
         reply_markup,
-      }).catch(() => callApi("editMessageText", {
-        chat_id: chatId,
-        message_id: messageId,
-        text: stripHtml(first),
-        reply_markup,
-      }).catch(() => undefined));
+      });
     },
 
     async answerCallbackQuery(callbackQueryId, text) {
