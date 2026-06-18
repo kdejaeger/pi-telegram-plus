@@ -329,10 +329,6 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
 
   pi.on("session_start", loadConfigAndSync);
 
-  // Also run after /reload (session_start doesn't fire again, but extension
-  // init does). Skip on initial load — session_start handles it.
-  if (getActiveSession()) loadConfigAndSync();
-
   pi.on("session_shutdown", () => {
     disposeRuntime();
     if (runtimeState.dispose === disposeRuntime) runtimeState.dispose = undefined;
