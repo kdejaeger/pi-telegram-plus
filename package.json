@@ -41,8 +41,8 @@
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.5",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }

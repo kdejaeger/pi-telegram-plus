@@ -10,7 +10,7 @@ import type { CapturedAgentSession } from "../types.ts";
  */
 async function trySetModel(
   session: CapturedAgentSession,
-  model: Model,
+  model: Model<any>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     await session.setModel(model);
@@ -21,7 +21,7 @@ async function trySetModel(
   }
 }
 
-function formatModel(model: Model): string {
+function formatModel(model: Model<any>): string {
   return `${model.provider}/${model.id}`;
 }
 
