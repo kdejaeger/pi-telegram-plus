@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { TelegramButton, TelegramConfig, TelegramSentMessage, TelegramTransport, TelegramUpdate } from "./types.ts";
-import { splitTelegramText } from "./text-split.ts";
+import { splitTelegramText, stripHtml } from "./text-split.ts";
+import { log } from "./logger.ts";
+
+const apiLog = log.child("telegram-api");
 
 type TelegramFileInfo = {
   file_id: string;
@@ -50,12 +53,17 @@ export async function telegramApi<T>(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    throw new Error(`Telegram API request failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const json = (await response.json()) as TelegramApiError & { result: T };
   if (!json.ok) throw new Error(json.description ?? `${method} failed`);
   return json.result;
@@ -72,10 +80,15 @@ export async function getTelegramFile(token: string, fileId: string, signal?: Ab
 
 export async function downloadTelegramFile(token: string, filePath: string, signal?: AbortSignal): Promise<Buffer> {
   const encodedPath = filePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
-  const response = await fetch(`https://api.telegram.org/file/bot${token}/${encodedPath}`, {
-    method: "GET",
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`https://api.telegram.org/file/bot${token}/${encodedPath}`, {
+      method: "GET",
+      signal,
+    });
+  } catch (error) {
+    throw new Error(`Telegram file download failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!response.ok) {
     throw new Error(`Failed to download Telegram file: ${response.status}`);
   }
@@ -131,15 +144,46 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
     return token;
   };
 
+  /** True when an error represents a network-level failure (fetch rejected,
+   *  DNS, connection refused/timeout, …). When the bot is unreachable the
+   *  plain-text fallback retry will fail identically, so callers should skip
+   *  it and let existing `.catch(swallow(...))` / status-line reporting
+   *  surface the outage instead of pointlessly retrying. */
+  const isNetworkError = (err: unknown): boolean => {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("Telegram API request failed")) return true;
+    return /\bfetch failed\b|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR|socket hang up|network(?:\s|_)?error/i.test(msg);
+  };
+
+  /** Log why an HTML-format send failed before falling back to plain text.
+   *  Network-level failures are intentionally NOT logged here: the polling
+   *  loop already reports them, and logging every failed send when the bot
+   *  is simply offline would only noise up the log file. */
+  const warnHtmlFallback = (label: string, err: unknown, preview: string) => {
+    if (isNetworkError(err)) return;
+    const reason = err instanceof Error ? err.message : String(err);
+    const snippet = preview.replace(/\s+/g, " ").slice(0, 120);
+    apiLog.warn(`HTML ${label} rejected; falling back to plain text`, { reason, snippet });
+  };
+
   return {
     async sendText(chatId, text) {
       const sent: TelegramSentMessage[] = [];
       for (const chunk of splitTelegramText(text)) {
-        const msg = await callApi<TelegramSentMessage>("sendMessage", {
+        const body = {
           chat_id: chatId,
           text: chunk,
           parse_mode: "HTML",
-        });
+        };
+        const msg = await callApi<TelegramSentMessage>("sendMessage", body)
+          .catch((err: unknown) => {
+            if (isNetworkError(err)) throw err;
+            warnHtmlFallback("sendMessage", err, chunk);
+            return callApi<TelegramSentMessage>("sendMessage", {
+              chat_id: chatId,
+              text: stripHtml(chunk),
+            });
+          });
         sent.push(msg);
       }
       return sent;
@@ -163,6 +207,14 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         text: first,
         parse_mode: "HTML",
         reply_markup,
+      }).catch((err: unknown) => {
+        if (isNetworkError(err)) throw err;
+        warnHtmlFallback("sendButtons", err, first);
+        return callApi<TelegramSentMessage>("sendMessage", {
+          chat_id: chatId,
+          text: stripHtml(first),
+          reply_markup,
+        });
       });
     },
 
@@ -173,6 +225,14 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         message_id: messageId,
         text: first,
         parse_mode: "HTML",
+      }).catch((err: unknown) => {
+        if (isNetworkError(err)) return; // swallow; nothing useful to retry
+        warnHtmlFallback("editMessageText", err, first);
+        return callApi("editMessageText", {
+          chat_id: chatId,
+          message_id: messageId,
+          text: stripHtml(first),
+        }).catch(apiLog.swallow("debug", "editMessageText plain-text fallback failed", { chatId, messageId }));
       });
     },
 
@@ -193,6 +253,15 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         text: first,
         parse_mode: "HTML",
         reply_markup,
+      }).catch((err: unknown) => {
+        if (isNetworkError(err)) return; // swallow; nothing useful to retry
+        warnHtmlFallback("editButtons", err, first);
+        return callApi("editMessageText", {
+          chat_id: chatId,
+          message_id: messageId,
+          text: stripHtml(first),
+          reply_markup,
+        }).catch(apiLog.swallow("debug", "editButtons plain-text fallback failed", { chatId, messageId }));
       });
     },
 
@@ -208,14 +277,14 @@ export function createTelegramTransport(getConfig: () => TelegramConfig): Telegr
         chat_id: chatId,
         message_id: messageId,
         reply_markup: { inline_keyboard: [] },
-      }).catch(() => undefined);
+      }).catch(apiLog.swallow("debug", "removeInlineKeyboard failed", { chatId, messageId }));
     },
 
     async deleteMessage(chatId, messageId) {
       await callApi("deleteMessage", {
         chat_id: chatId,
         message_id: messageId,
-      }).catch(() => undefined);
+      }).catch(apiLog.swallow("debug", "deleteMessage failed", { chatId, messageId }));
     },
 
     async sendDocument(chatId, path, caption, signal) {

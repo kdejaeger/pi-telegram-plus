@@ -1,14 +1,14 @@
 # pi-telegram-plus
 
 <p>
-  <a href="https://www.npmjs.com/package/pi-telegram-plus"><img src="https://img.shields.io/npm/v/pi-telegram-plus?style=flat-square&logo=npm" alt="npm" /></a>
-  <a href="https://github.com/jalyfeng/pi-telegram-plus"><img src="https://img.shields.io/github/license/jalyfeng/pi-telegram-plus?style=flat-square" alt="license" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22.19.0-339933?style=flat-square&logo=node.js" alt="node" />
 </p>
 
 **Full Telegram control of [pi coding agent](https://github.com/earendil-works/pi-coding-agent) — commands, interactive UI, model/session management, file transfer, and real-time streaming output, all from Telegram.**
 
 `pi-telegram-plus` is a pi extension that turns Telegram into a full-featured remote control surface for the pi coding agent. It's not just a notification bot — it mirrors the core pi TUI experience into Telegram, with interactive menus, inline keyboards, file attachments, and live agent output rendering.
+
+> **Forked from [jalyfeng/pi-telegram-plus](https://github.com/jalyfeng/pi-telegram-plus)** — extended with Rich Message API, improved error handling, guardrails/ask-user-question custom UI support, and more.
 
 ---
 
@@ -56,9 +56,10 @@ Full interactive UI components built on inline keyboards:
 - **InputSecret** — same as Input, but the prompt message is auto-deleted after reply to protect sensitive data
 - **Select** — paginated option list with Prev/Next navigation
 - **Editor** — multi-line text input prompt
+- **Custom** — routes external extension UIs (e.g. `ask_user_question`, guardrails prompts) through Telegram
 
 ### 🎨 Message Rendering
-- **Markdown → Telegram HTML** — Full conversion via `marked` (tables, code blocks, blockquotes, lists, inline formatting)
+- **Rich Message API** — native Telegram markdown rendering via `sendRichText`/`editRichText`, no extra dependencies
 - **Tool execution rendering** — Configurable level (`hidden` / `brief` / `full`) for tool call visibility
 - **Thinking rendering** — Configurable level (`hidden` / `brief` / `full`) for agent thinking blocks
 - **Output splitting** — Safe UTF-8-aware splitting at Telegram's 4096-byte limit
@@ -97,7 +98,7 @@ Full interactive UI components built on inline keyboards:
 | `/cwd` | Show current working directory |
 | `/cd` | Switch pi working directory |
 | `/stop` | Abort the current agent turn |
-| `/debug` | Show debug info (model, thinking, streaming, entries) |
+| `/status` | Show runtime snapshot (workspace, model, context, messages) |
 | `/settings` | Open settings menu |
 | `/copy` | Copy last assistant text |
 | `/export` | Export session to HTML/JSONL |
@@ -118,30 +119,26 @@ Full interactive UI components built on inline keyboards:
 - [pi coding agent](https://github.com/earendil-works/pi-coding-agent) installed globally
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
-### Installation
-
-**Install via npm (recommended):**
+### Install via npm
 
 ```bash
-pi install npm:pi-telegram-plus
+pi install npm:@kdejaeger/pi-telegram-plus
 ```
 
-**Or install from source:**
+> **Forked from [jalyfeng/pi-telegram-plus](https://github.com/jalyfeng/pi-telegram-plus)** — this fork is published on npm as `@kdejaeger/pi-telegram-plus`.
+
+### Or install from source
 
 ```bash
-git clone https://github.com/jalyfeng/pi-telegram-plus.git
+git clone https://github.com/kdejaeger/pi-telegram-plus.git
 cd pi-telegram-plus
 npm install
 pi packages add .
 ```
 
-3. **Start pi and configure your Telegram bot:**
+### Configure your Telegram bot
 
-```bash
-pi
-```
-
-Inside pi, run:
+Start pi, then run:
 
 ```
 /tg-setup
@@ -190,6 +187,21 @@ Or directly:
 | `brief`          | `telegram+` with state icon, no username |
 | `full` (default) | `telegram+` with state icon and @username |
 
+### Logging
+
+`pi-telegram-plus` writes diagnostic logs to a file-based JSON Lines logger:
+
+- **Location:** `~/.pi/agent/logs/pi-telegram-plus-YYYY-MM-DD.log` (one file per UTC day)
+- **Format:** One JSON object per line — `{ "ts": "…", "level": "…", "msg": "…", "scope": "…", … }`
+- **Levels:** `debug`, `info`, `warn`, `error` — configurable via `PI_TELEGRAM_PLUS_LOG_LEVEL` env var
+- **Rotation:** Files rotate at 10 MiB per day, keeping up to 5 rotated copies
+
+View recent logs:
+
+```bash
+tail -f ~/.pi/agent/logs/pi-telegram-plus-$(date +%F).log | jq .
+```
+
 ---
 
 ## How It Works
@@ -211,17 +223,17 @@ Or directly:
         │ Live Tool/Thinking Events      │  │  └─────────────┘ │  │
         │ File Attachments (tg_attach)   │  │                  │  │
         └───────────────────────────────────┤  ┌─────────────┐ │  │
-                                          │  │  Renderer    │ │  │
-                                          │  │  (Markdown→  │ │  │
-                                          │  │   Telegram   │ │  │
-                                          │  │   HTML)      │ │  │
+                                          │  │  Renderer   │ │  │
+                                          │  │  (Rich Msg  │ │  │
+                                          │  │   API /     │ │  │
+                                          │  │   Markdown) │ │  │
                                           │  └─────────────┘ │  │
                                           │         │         │  │
                                           │         ▼         │  │
                                           │  ┌─────────────┐  │  │
                                           │  │ pi Agent    │  │  │
                                           │  │ (session,   │  │  │
-                                          │  │ models,     │  │  │
+                                          │  │ models,      │  │  │
                                           │  │ tools, ...) │  │  │
                                           │  └─────────────┘  │  │
                                           └──────────────────────┘
@@ -230,20 +242,26 @@ Or directly:
 ### Architecture Overview
 
 - **`index.ts`** — Extension entry point. Wires all modules together and handles `session_start`/`session_shutdown` lifecycle events.
-- **`lib/telegram-api.ts`** — Raw Telegram Bot API client with retry logic and file upload/download.
+  - Registers the `tg_attach` tool (schema via `typebox`)
+  - Imports and initializes all modules
+- **`lib/telegram-api.ts`** — Raw Telegram Bot API client with retry logic, file upload/download, and Rich Message API (sendRichText/editRichText).
 - **`lib/polling.ts`** — Long polling loop with multi-instance file lock. Re-reads config while holding the lock to prevent offset regressions.
-- **`lib/controller.ts`** — Message routing: slash commands, text prompts, media attachments, callback queries.
-- **`lib/telegram-ui.ts`** — Interactive UI layer: notify, confirm, input, select (pagination), editor.
-- **`lib/renderer.ts`** — Hooks into agent lifecycle events (`agent_start`, `tool_execution_*`, `message_end`) and streams rendered output to Telegram.
-- **`lib/markdown.ts`** — Custom `marked` renderer that converts Markdown to Telegram-compatible HTML.
+- **`lib/controller.ts`** — Message routing: slash commands, text prompts, media attachments, callback queries. Routes custom extension UIs (guardrails, ask_user_question) to the Telegram UI runtime.
+- **`lib/telegram-ui.ts`** — Interactive UI layer: notify, confirm, input, inputSecret, select (pagination), editor, and generic `custom()` handler for external extension UIs.
+- **`lib/renderer.ts`** — Hooks into agent lifecycle events (`agent_start`, `tool_execution_*`, `message_end`) and streams rendered output to Telegram via the Rich Message API.
+- **`lib/html.ts`** — HTML escaping utilities (for safe Telegram HTML mode fallback).
+- **`lib/text-split.ts`** — UTF-8-safe text splitter for Telegram's 4096-byte message limit.
 - **`lib/config.ts`** — Configuration persistence with file locking for concurrent-safe writes. Supports global + workspace scopes.
-- **`lib/attachments.ts`** — `tg_attach` tool registration and outbound attachment delivery.
-- **`lib/commands/`** — Command handler modules: model, session, auth (login/logout), lifecycle, settings, tg-config, telegram-commands.
-- **`lib/heartbeat.ts`** — Periodic typing indicator while processing.
-- **`lib/status.ts`** — TUI status line integration showing connection state.
+- **`lib/attachments.ts`** — `tg_attach` tool registration (TypeBox schema) and outbound attachment delivery.
+- **`lib/logger.ts`** — File-based JSON Lines logger with rotation, used for debugging Telegram issues.
 - **`lib/session-capture.ts`** — Monkeys patches `AgentSession.bindExtensions` to intercept session lifecycle and capture the active session reference.
+- **`lib/status.ts`** — TUI status line integration showing connection state.
+- **`lib/heartbeat.ts`** — Periodic typing indicator while processing.
 - **`lib/menu-commands.ts`** — Builds and syncs the Telegram BotMenu command list.
 - **`lib/callback-protocol.ts`** — Encodes/decodes inline button callback data.
+- **`lib/command-parser.ts`** — Slash command parser & bot-username normalizer.
+- **`lib/types.ts`** — All TypeScript interfaces & types.
+- **`lib/commands/`** — Command handler modules: model, session, auth (login/logout), lifecycle, settings, tg-config, telegram-commands, info.
 
 ---
 
@@ -252,48 +270,46 @@ Or directly:
 ```
 pi-telegram-plus/
 ├── index.ts                     # Extension entry point
-├── pi-host.d.ts                 # Type augmentation for @earendil-works/pi-ai
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
-├── .pi/
-│   └── settings.json            # pi package registration
 └── lib/
-    ├── types.ts                 # All TypeScript interfaces & types
+    ├── types.ts                  # All TypeScript interfaces & types
     ├── telegram-api.ts          # Telegram Bot HTTP API client
-    ├── polling.ts               # Long polling with multi-instance lock
-    ├── controller.ts            # Message router & prompt executor
-    ├── telegram-ui.ts           # Interactive UI (notify, confirm, input, select)
-    ├── renderer.ts              # Agent event → Telegram output renderer
-    ├── markdown.ts              # Markdown → Telegram HTML converter
-    ├── html.ts                  # HTML escaping utilities
-    ├── text-split.ts            # UTF-8-safe text splitter for 4096 byte limit
-    ├── command-parser.ts        # Slash command parser & bot-username normalizer
-    ├── config.ts                # Configuration store (global + workspace scopes)
-    ├── attachments.ts           # Outbound file attachment tool (tg_attach)
-    ├── heartbeat.ts             # Typing indicator pulse
-    ├── status.ts                # TUI status line formatter
-    ├── session-capture.ts       # Agent session capture & handler patching
-    ├── menu-commands.ts         # Telegram BotMenu sync
-    ├── callback-protocol.ts     # UI callback encoding/decoding
+    ├── polling.ts                # Long polling with multi-instance lock
+    ├── controller.ts                # Message router & prompt executor
+    ├── telegram-ui.ts            # Interactive UI (notify, confirm, input, select, editor, custom)
+    ├── renderer.ts               # Agent event → Telegram output renderer
+    ├── html.ts                   # HTML escaping utilities
+    ├── text-split.ts              # UTF-8-safe text splitter for 4096 byte limit
+    ├── command-parser.ts         # Slash command parser & bot-username normalizer
+    ├── config.ts                 # Configuration store (global + workspace scopes)
+    ├── attachments.ts            # Outbound file attachment tool (tg_attach)
+    ├── heartbeat.ts              # Typing indicator pulse
+    ├── status.ts                 # TUI status line formatter
+    ├── logger.ts                 # File-based JSON Lines logger with rotation
+    ├── session-capture.ts        # Agent session capture & handler patching
+    ├── menu-commands.ts          # Telegram BotMenu sync
+    ├── callback-protocol.ts      # UI callback encoding/decoding
     ├── commands/
-    │   ├── register.ts          # Command registry aggregator
-    │   ├── model.ts             # /model, /scoped-models, /thinking
-    │   ├── session.ts           # /new, /fork, /clone, /tree, /resume, /cd, /cwd, /name, /session
-    │   ├── auth.ts              # /login (OAuth + API key), /logout
-    │   ├── info.ts              # /copy, /export, /import, /share, /changelog, /hotkeys, /debug
-    │   ├── lifecycle.ts         # /compact, /reload, /stop, /quit
-    │   ├── settings.ts          # /settings menu
-    │   ├── tg-config.ts         # /tg-config
-    │   └── telegram-commands.ts # /tg-setup, /tg-connect, /tg-disconnect, /tg-bind-cwd, /tg-list
+    │   ├── register.ts           # Command registry aggregator
+    │   ├── model.ts              # /model, /scoped-models, /thinking
+    │   ├── session.ts            # /new, /fork, /clone, /tree, /resume, /cd, /cwd, /name, /session
+    │   ├── auth.ts               # /login (OAuth + API key), /logout
+    │   ├── info.ts               # /status, /copy, /export, /import, /share, /changelog, /hotkeys
+    │   ├── lifecycle.ts          # /compact, /reload, /stop, /quit
+    │   ├── settings.ts           # /settings menu
+    │   ├── tg-config.ts          # /tg-config
+    │   └── telegram-commands.ts  # /tg-setup, /tg-connect, /tg-disconnect, /tg-bind-cwd, /tg-list
     └── __tests__/
         ├── attachments.test.ts
         ├── callback-protocol.test.ts
         ├── config.test.ts
         ├── controller.test.ts
         ├── html.test.ts
-        ├── markdown.test.ts
+        ├── info-status.test.ts
         ├── status.test.ts
+        ├── telegram-ui.test.ts
         └── text-split.test.ts
 ```
 
@@ -325,6 +341,6 @@ npm run test:watch
 
 ---
 
-## License
+## Changelog
 
-MIT
+See [CHANGELOG.md](./CHANGELOG.md).

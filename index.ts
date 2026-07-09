@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerTelegramAttachmentTool } from "./lib/attachments.ts";
+import { initLogger } from "./lib/logger.ts";
 import { readResolvedTelegramConfig, writeResolvedTelegramConfig } from "./lib/config.ts";
 import { createTelegramController, type TelegramCommandHandler } from "./lib/controller.ts";
 import { createHeartbeat } from "./lib/heartbeat.ts";
@@ -32,6 +33,8 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   installAgentSessionCapture();
   const runtimeState = getTelegramPlusRuntimeState();
   runtimeState.dispose?.();
+
+  initLogger();
 
   let config: TelegramConfig = {};
   let resolvedConfig: ResolvedTelegramConfig | undefined;
@@ -127,8 +130,13 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     "tg-bind-cwd", "tg-unbind-cwd", "tg-list",
     // other pi-telegram-plus custom commands (TUI-only command list excludes /import, which is now
     // a built-in pi command; keep Telegram handler registration only.
-    "cwd", "cd", "thinking", "stop", "debug", "commands",
+    "cwd", "cd", "thinking", "stop", "commands",
   ]);
+
+  const infoDeps = {
+    getTransport: () => transport,
+    getActiveChatId: () => config.activeChatId,
+  };
 
   registerAllCommands({
     registerCommand: (name: string, options: { description?: string; handler: TelegramCommandHandler }) => {
@@ -137,7 +145,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
         pi.registerCommand(name, { description: options.description, handler: options.handler });
       }
     },
-  }, sessionDeps, sessionNameDeps, tgConfigDeps);
+  }, sessionDeps, sessionNameDeps, tgConfigDeps, infoDeps);
 
   registerTelegramCommands({
     registerCommand: (name: string, options: { description?: string; handler: TelegramCommandHandler }) => {

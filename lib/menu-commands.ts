@@ -6,7 +6,6 @@ const TELEGRAM_EXCLUDED_COMMANDS = new Set([
   "tg-connect",
   "tg-disconnect",
   "tg-setup",
-  "tg-config",
 ]);
 
 const TELEGRAM_MENU_COMMANDS: Array<{ command: string; description: string }> = [
@@ -29,10 +28,9 @@ const TELEGRAM_MENU_COMMANDS: Array<{ command: string; description: string }> = 
 
   // ⚙️ Settings & Telegram management
   { command: "settings", description: "Open settings menu" },
-  { command: "tg-config", description: "Configure Telegram message rendering" },
 
   // ℹ️ Info & diagnostics
-  { command: "debug", description: "Show debug information" },
+  { command: "status", description: "Show runtime snapshot" },
   { command: "cwd", description: "Show current working directory" },
   { command: "tg-list", description: "List Telegram bot bindings" },
 ];

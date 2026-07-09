@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package",
-  "name": "pi-telegram-plus",
-  "version": "0.0.1",
+  "name": "@kdejaeger/pi-telegram-plus",
+  "version": "0.1.0",
   "description": "Full Telegram control of pi coding agent — commands, menus, interactive UI, model management, and more",
   "keywords": [
     "pi-package",
@@ -10,7 +10,6 @@
     "coding-agent",
     "remote-control"
   ],
-  "license": "MIT",
   "author": "kdejaeger",
   "type": "module",
   "engines": {
@@ -19,8 +18,7 @@
   "files": [
     "index.ts",
     "lib/**/*.ts",
-    "!lib/__tests__/",
-    "pi-host.d.ts"
+    "!lib/__tests__/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
