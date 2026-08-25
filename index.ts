@@ -127,10 +127,10 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   const TUI_VISIBLE_COMMANDS = new Set([
     // tg-* commands
     "tg-setup", "tg-connect", "tg-disconnect", "tg-config",
-    "tg-bind-cwd", "tg-unbind-cwd", "tg-list",
-    // other pi-telegram-plus custom commands (TUI-only command list excludes /import, which is now
-    // a built-in pi command; keep Telegram handler registration only.
-    "cwd", "cd", "thinking", "stop", "commands",
+    "tg-bind-cwd", "tg-unbind-cwd", "tg-list", "tg-status",
+    // other pi-telegram-plus custom commands (TUI-only command list excludes /import and /thinking,
+    // which are now built-in pi commands; keep Telegram handler registration only.
+    "cwd", "cd", "stop", "commands",
   ]);
 
   const infoDeps = {
