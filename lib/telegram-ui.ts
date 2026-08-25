@@ -122,6 +122,7 @@ export function createTelegramUiRuntime(deps: {
           ]], flowId);
           const value = await waitInput(chatId, flowId, false, false, sent.message_id);
           activeFlowByChat.delete(chatId);
+          void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
           return value === true || value === "yes";
         },
         input: async (title, placeholder) => {
@@ -130,6 +131,7 @@ export function createTelegramUiRuntime(deps: {
           const sent = await sendOrReplaceButtons(chatId, `<b>${escapeHtml(title)}</b>${placeholder ? `\n${escapeHtml(placeholder)}` : ""}`, [[{ text: "Cancel", value: cb(flowId, "cancel") }]], flowId);
           const value = await waitInput(chatId, flowId, false, true, sent.message_id);
           activeFlowByChat.delete(chatId);
+          void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
           return typeof value === "string" ? value : undefined;
         },
         inputSecret: async (title: string, placeholder?: string) => {
@@ -138,6 +140,7 @@ export function createTelegramUiRuntime(deps: {
           const sent = await sendOrReplaceButtons(chatId, `<b>${escapeHtml(title)}</b>${placeholder ? `\n${escapeHtml(placeholder)}` : ""}`, [[{ text: "Cancel", value: cb(flowId, "cancel") }]], flowId);
           const value = await waitInput(chatId, flowId, true, true, sent.message_id);
           activeFlowByChat.delete(chatId);
+          void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
           return typeof value === "string" ? value : undefined;
         },
         editor: async (title, prefill) => {
@@ -146,6 +149,7 @@ export function createTelegramUiRuntime(deps: {
           const sent = await sendOrReplaceButtons(chatId, `<b>${escapeHtml(title)}</b>${prefill ? `\n${escapeHtml(prefill)}` : ""}`, [[{ text: "Cancel", value: cb(flowId, "cancel") }]], flowId);
           const value = await waitInput(chatId, flowId, false, true, sent.message_id);
           activeFlowByChat.delete(chatId);
+          void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
           return typeof value === "string" ? value : undefined;
         },
         select: async (title, options) => {
@@ -162,12 +166,13 @@ export function createTelegramUiRuntime(deps: {
             const suffix = pageCount > 1 ? ` (${page + 1}/${pageCount})` : "";
             const sent = await sendOrReplaceButtons(chatId, `<b>${escapeHtml(title + suffix)}</b>`, rows, flowId);
             const value = await waitInput(chatId, flowId, false, false, sent.message_id);
-            if (typeof value !== "string") { activeFlowByChat.delete(chatId); return undefined; }
-            if (value === "cancel") { activeFlowByChat.delete(chatId); return undefined; }
+            if (typeof value !== "string") { activeFlowByChat.delete(chatId); void deps.transport.removeInlineKeyboard(chatId, sent.message_id); return undefined; }
+            if (value === "cancel") { activeFlowByChat.delete(chatId); void deps.transport.removeInlineKeyboard(chatId, sent.message_id); return undefined; }
             if (value.startsWith("p:")) { const next = parseInt(value.slice(2), 10); if (next >= 0 && next < pageCount) page = next; continue; }
-            if (value.startsWith("s:")) { const idx = parseInt(value.slice(2), 10); activeFlowByChat.delete(chatId); return idx >= 0 && idx < options.length ? options[idx] : undefined; }
-            if (options.includes(value)) { activeFlowByChat.delete(chatId); return value; }
+            if (value.startsWith("s:")) { const idx = parseInt(value.slice(2), 10); activeFlowByChat.delete(chatId); void deps.transport.removeInlineKeyboard(chatId, sent.message_id); return idx >= 0 && idx < options.length ? options[idx] : undefined; }
+            if (options.includes(value)) { activeFlowByChat.delete(chatId); void deps.transport.removeInlineKeyboard(chatId, sent.message_id); return value; }
             activeFlowByChat.delete(chatId);
+            void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
             return undefined;
           }
         },
@@ -177,6 +182,7 @@ export function createTelegramUiRuntime(deps: {
           pendingJuicesharpRpivAskUserQuestionData = null;
           if (juicesharpRpivAskUserQuestionData?.questions?.length) {
             const answers: any[] = [];
+            let lastSentMessageId: number | undefined;
             for (let i = 0; i < juicesharpRpivAskUserQuestionData.questions.length; i++) {
               const q = juicesharpRpivAskUserQuestionData.questions[i];
               const multi = q.multiSelect;
@@ -197,32 +203,37 @@ export function createTelegramUiRuntime(deps: {
                 btn("💬 Chat about this", "chat");
                 const selText = multi && sel.size ? `\n<i>Selected: ${[...sel].map(i => escapeHtml(q.options[i].label)).join(", ")}</i>` : "";
                 const sent = await deps.transport.sendButtons(chatId, `<b>${escapeHtml(q.question)}</b>${selText}`, rows);
+                lastSentMessageId = sent.message_id;
                 const val = await waitInput(chatId, flowId, false, !multi, sent.message_id);
                 activeFlowByChat.delete(chatId);
-                if (val === undefined || val === "chat") return { answers, cancelled: true } as T;
+                if (val === undefined || val === "chat") { void deps.transport.removeInlineKeyboard(chatId, sent.message_id); return { answers, cancelled: true } as T; }
                 if (multi && typeof val === "string") {
                   if (val.startsWith("t:")) { const oi = parseInt(val.slice(2), 10); if (!isNaN(oi)) { if (sel.has(oi)) sel.delete(oi); else sel.add(oi); } }
-                  else if (val === "done") { done = true; answers.push({ questionIndex: i, question: q.question, kind: "multi", answer: null, selected: [...sel].map(i => q.options[i].label) }); }
+                  else if (val === "done") { void deps.transport.removeInlineKeyboard(chatId, sent.message_id); done = true; answers.push({ questionIndex: i, question: q.question, kind: "multi", answer: null, selected: [...sel].map(i => q.options[i].label) }); }
                 } else if (!multi) {
                   if (typeof val === "string" && val.startsWith("o:")) {
                     const oi = parseInt(val.slice(2), 10);
-                    if (!isNaN(oi) && oi < q.options.length) { answers.push({ questionIndex: i, question: q.question, kind: "option", answer: q.options[oi].label }); done = true; }
+                    if (!isNaN(oi) && oi < q.options.length) { void deps.transport.removeInlineKeyboard(chatId, sent.message_id); answers.push({ questionIndex: i, question: q.question, kind: "option", answer: q.options[oi].label }); done = true; }
                   } else if (val === "other") {
                     const tf = beginFlow();
                     activeFlowByChat.set(chatId, tf);
                     const p = await deps.transport.sendButtons(chatId, `<b>${escapeHtml(q.question)}</b>\n\nType your answer:`, [[{ text: "Cancel", value: cb(tf, "cancel") }]]);
                     const tv = await waitInput(chatId, tf, false, true, p.message_id);
                     activeFlowByChat.delete(chatId);
-                    if (tv === undefined) continue;
+                    if (tv === undefined) { void deps.transport.removeInlineKeyboard(chatId, p.message_id); continue; }
+                    void deps.transport.removeInlineKeyboard(chatId, p.message_id);
+                    void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
                     answers.push({ questionIndex: i, question: q.question, kind: "custom", answer: String(tv) });
                     done = true;
                   } else if (typeof val === "string") {
+                    void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
                     answers.push({ questionIndex: i, question: q.question, kind: "custom", answer: val });
                     done = true;
                   }
                 }
               }
             }
+            if (lastSentMessageId !== undefined) void deps.transport.removeInlineKeyboard(chatId, lastSentMessageId);
             return { answers, cancelled: false } as T;
           }
 
@@ -259,6 +270,7 @@ export function createTelegramUiRuntime(deps: {
                 rows);
               const val = await waitInput(chatId, flowId, false, false, sent.message_id);
               activeFlowByChat.delete(chatId);
+              void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
               return (val === undefined || val === "cancel" ? "deny" : String(val)) as T;
             }
 
@@ -272,6 +284,7 @@ export function createTelegramUiRuntime(deps: {
                 rows);
               const val = await waitInput(chatId, flowId, false, false, sent.message_id);
               activeFlowByChat.delete(chatId);
+              void deps.transport.removeInlineKeyboard(chatId, sent.message_id);
               return (val === undefined || val === "cancel" ? "deny" : String(val)) as T;
             }
           }

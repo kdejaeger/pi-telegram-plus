@@ -14,6 +14,7 @@ import { formatTelegramStatusLine, clearTelegramStatus, TELEGRAM_STATUS_KEY } fr
 import { createTelegramPollingRuntime } from "./lib/polling.ts";
 import { registerAllCommands } from "./lib/commands/register.ts";
 import { registerTelegramCommands } from "./lib/commands/telegram-commands.ts";
+import { registerTelegramStatusTool } from "./lib/status-tool.ts";
 import { syncTelegramCommands } from "./lib/menu-commands.ts";
 import type { ResolvedTelegramConfig, TelegramConfig, TelegramTurn } from "./lib/types.ts";
 
@@ -168,6 +169,12 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     startStatusHeartbeat: () => heartbeat.startStatusHeartbeat(refreshStatus),
     clearStatusError: () => { lastStatusError = undefined; },
     getCommands: () => pi.getCommands(),
+  });
+
+  registerTelegramStatusTool(pi, {
+    getConfig: () => config,
+    getPolling: () => polling,
+    getLastStatusError: () => lastStatusError,
   });
 
   registerTelegramAttachmentTool(pi, {

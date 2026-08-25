@@ -12,6 +12,9 @@ import type {
   TelegramTurn,
 } from "./types.ts";
 import type { TelegramUiRuntime } from "./telegram-ui.ts";
+import { log } from "./logger.ts";
+
+const ctrlLog = log.child("controller");
 
 export type TelegramController = {
   handleMessage(message: TelegramMessage): Promise<void>;
@@ -153,6 +156,12 @@ export function createTelegramController(deps: {
     void abortResult?.catch?.(() => undefined);
   };
 
+  const reportPromptFailure = async (label: string, chatId: number, err: unknown): Promise<void> => {
+    ctrlLog.error(`${label} prompt task failed`, { chatId, err });
+    await deps.transport.sendText(chatId, "⚠️ Your message could not be delivered to π. Please retry.")
+      .catch(ctrlLog.swallow("warn", "sendText prompt-failure notice failed", { chatId }));
+  };
+
   const runPrompt = async (text: string, chatId: number, replaceMessageId?: number) => {
     const session = deps.getSession();
     if (!session) {
@@ -181,7 +190,9 @@ export function createTelegramController(deps: {
           await runWithTelegramUi({
             session,
             ui: telegramUi,
-            run: () => session.prompt(text, { source: "interactive" }),
+            run: async () => {
+              await session.prompt(text, { source: "interactive", streamingBehavior: "steer" as const });
+            },
           });
         } finally {
           deps.endTelegramTurn(chatId, turn);
@@ -210,7 +221,15 @@ export function createTelegramController(deps: {
       await runWithTelegramUi({
         session,
         ui: telegramUi,
-        run: () => session.prompt(text, { source: "interactive" }),
+        run: async () => {
+          // Always provide a delivery mode. AgentSession re-checks isStreaming
+          // after awaiting input hooks, so a goal continuation can start after
+          // our snapshot above and before prompt dispatch.
+          await session.prompt(text, {
+            source: "interactive",
+            streamingBehavior: mode === "queue" ? "followUp" as const : "steer" as const,
+          });
+        },
       });
     } finally {
       deps.endTelegramTurn(chatId, turn);
@@ -221,7 +240,7 @@ export function createTelegramController(deps: {
     const mode = deps.getMessageMode();
     if (mode === "steer") {
       const task = runPrompt(text, chatId, replaceMessageId);
-      void task.catch(() => undefined);
+      void task.catch((err) => reportPromptFailure("steer-mode", chatId, err));
       return;
     }
 
@@ -233,7 +252,7 @@ export function createTelegramController(deps: {
         if (generation !== getInterruptGeneration(chatId)) return;
         return runPrompt(text, chatId, replaceMessageId);
       })
-      .catch(() => undefined);
+      .catch((err) => reportPromptFailure("queue-mode", chatId, err));
     setTail(chatId, task);
   };
 
@@ -297,15 +316,16 @@ export function createTelegramController(deps: {
         const result = deps.ui.resolveInput(chatId, uiValue, query.message?.message_id, true);
         if (!result.handled) {
           await deps.transport.sendText(chatId, "This prompt is no longer active.");
-        } else {
-          // Remove inline keyboards only for terminal UI callbacks. Select
-          // pagination callbacks continue the same flow and immediately edit the
-          // same message with the next page of buttons; removing the keyboard here
-          // can race after that edit and strip the new page buttons.
-          const isPaginationCallback = /^f:[^:]+:p:\d+$/.test(uiValue);
-          const promptMessageId = result.promptMessageId ?? query.message?.message_id;
-          if (!isPaginationCallback && promptMessageId) void deps.transport.removeInlineKeyboard(chatId, promptMessageId);
         }
+        // Keyboard cleanup is OWNED by each UI flow (confirm/input/select/editor and
+        // the custom() questionnaire in telegram-ui.ts): each calls removeInlineKeyboard
+        // on its own prompt message right before resolving a terminal value. The controller
+        // must NOT speculatively strip keyboards here. Doing so races with continuation
+        // flows (multi-question option toggles, select pagination, single-question re-display)
+        // that edit the SAME message in place: removeInlineKeyboard and editButtons hit
+        // Telegram concurrently on one message, and when the strip lands last the message
+        // is left with no buttons — the "answered Q1 but Q2 never appeared" bug. Terminal
+        // flows clean up themselves.
         return;
       }
 

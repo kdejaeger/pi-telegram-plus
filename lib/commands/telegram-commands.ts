@@ -144,6 +144,46 @@ export function registerTelegramCommands(
     },
   });
 
+  // ── /tg-status ────────────────────────────────────────────────────────
+  registry.registerCommand("tg-status", {
+    description: "Show Telegram connection status",
+    handler: async (_args, ctx) => {
+      const config = deps.getConfig();
+      const polling = deps.getPolling();
+      const isTelegramCtx = typeof (ctx.ui as Record<string, unknown>)?.chatId === "number";
+
+      const connected = !!config.botToken && polling.isActive() && config.allowedUserId !== undefined;
+
+      if (!isTelegramCtx) {
+        const label = config.botUsername ? ` @${config.botUsername}` : "";
+        ctx.ui.notify(
+          `Telegram: ${connected ? "✅ Connected" : "❌ Disconnected"}` +
+          `${label}\n` +
+          `Scope: ${deps.getResolvedConfig()?.scope ?? "global"}\n` +
+          `Mode: ${config.messageMode ?? "steer"}`,
+          "info",
+        );
+      } else {
+        const lines = [
+          `📡 Telegram: ${connected ? "✅ Connected" : "❌ Disconnected"}`,
+          ...(config.botUsername ? [`Bot: @${config.botUsername}`] : []),
+          `Polling: ${polling.isActive() ? "active" : "stopped"}`,
+          `Paired: ${config.allowedUserId !== undefined ? "yes" : "no"}`,
+          `Scope: ${deps.getResolvedConfig()?.scope ?? "global"}`,
+          `Mode: ${config.messageMode ?? "steer"}`,
+        ];
+        const chatId = typeof (ctx.ui as Record<string, unknown>)?.chatId === "number"
+          ? (ctx.ui as Record<string, unknown>).chatId as number
+          : undefined;
+        if (chatId === undefined) {
+          ctx.ui.notify("No active Telegram chat to send status to.", "error");
+          return;
+        }
+        await deps.transport.sendText(chatId, lines.join("\n"));
+      }
+    },
+  });
+
   // ── /tg-list ───────────────────────────────────────────────────────────
   registry.registerCommand("tg-list", {
     description: "List Telegram bot bindings",
