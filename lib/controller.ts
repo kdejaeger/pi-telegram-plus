@@ -348,8 +348,10 @@ export function createTelegramController(deps: {
       if (trimmed === "/stop") {
         // /stop cancellation priority: first try canceling a reply-targeted
         // pending input, then any pending input, then abort the agent turn.
-        const cancelResult = deps.ui.resolveInput(chatId, undefined, replyToInput);
-        const cancelAnyResult = !cancelResult.handled ? deps.ui.resolveInput(chatId, undefined) : cancelResult;
+        // cancelPendingInput marks the flow user-cancelled, so dual-surface
+        // prompts (terminal + Telegram) end on BOTH surfaces.
+        const cancelResult = deps.ui.cancelPendingInput(chatId, replyToInput);
+        const cancelAnyResult = cancelResult.handled ? cancelResult : deps.ui.cancelPendingInput(chatId);
         if (cancelAnyResult.handled) {
           if (cancelAnyResult.promptMessageId) void deps.transport.removeInlineKeyboard(chatId, cancelAnyResult.promptMessageId);
           await deps.transport.sendText(chatId, "Cancelled.");

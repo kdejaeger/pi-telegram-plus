@@ -513,11 +513,12 @@ describe("TelegramUiRuntime integrated extension prompt behaviors", () => {
       transport,
     });
 
-    runtime.setAliouPiGuardrailsData({
+    runtime.pushGuardrailsPrompt({
       feature: "pathAccess",
       action: { path: "/etc/passwd", origin: "cat" },
       context: { toolName: "cat" },
       reason: "Suspected system file access",
+      prompt: { id: "test-path-access", kind: "confirmation" },
     });
 
     const ui = runtime.create(chatId);
@@ -552,10 +553,11 @@ describe("TelegramUiRuntime integrated extension prompt behaviors", () => {
       transport,
     });
 
-    runtime.setAliouPiGuardrailsData({
+    runtime.pushGuardrailsPrompt({
       feature: "permissionGate",
       action: { command: "rm -rf /" },
       reason: "Destructive command execution",
+      prompt: { id: "test-permission-gate", kind: "confirmation" },
     });
 
     const ui = runtime.create(chatId);
@@ -595,5 +597,260 @@ describe("TelegramUiRuntime integrated extension prompt behaviors", () => {
 
     expect(result).toBeUndefined();
     expect(transport.sendText).toHaveBeenCalledWith(chatId, "📋 The agent needs input — please respond in the terminal.");
+  });
+});
+
+describe("TelegramUiRuntime dual-surface custom() prompts", () => {
+  const chatId = 12345;
+
+  const mockTransport = () => {
+    let messageIdCounter = 100;
+    return {
+      removeInlineKeyboard: vi.fn(async () => undefined),
+      sendText: vi.fn(async () => [{ message_id: messageIdCounter++ }]),
+      sendButtons: vi.fn(async () => ({ message_id: messageIdCounter++ })),
+      editText: vi.fn(async () => undefined),
+      editButtons: vi.fn(),
+      answerCallbackQuery: vi.fn(),
+      deleteMessage: vi.fn(),
+      sendDocument: vi.fn(),
+      sendPhoto: vi.fn(),
+      sendChatAction: vi.fn(),
+    };
+  };
+
+  /** Fake terminal UI context: custom() invokes the factory synchronously and resolves via done. */
+  const makeBase = () => {
+    const pending: Array<(value: any) => void> = [];
+    const custom = vi.fn((factory: any) => {
+      return new Promise<any>((resolve) => {
+        const done = (value: any) => {
+          const i = pending.indexOf(done);
+          if (i >= 0) pending.splice(i, 1);
+          resolve(value);
+        };
+        pending.push(done);
+        factory({ terminal: { columns: 80 } }, { fg: (_c: string, t: string) => t }, {}, done);
+      });
+    });
+    return { custom, resolveTerminal: (value: any) => pending[0]?.(value) };
+  };
+
+  const pathAccessPayload = (id: string) => ({
+    feature: "pathAccess",
+    action: { path: "/etc/hosts", origin: "cat" },
+    context: { toolName: "cat" },
+    reason: "Suspected system file access",
+    prompt: { id, kind: "confirmation" },
+  });
+
+  const makeRuntime = (transport: any, base: ReturnType<typeof makeBase>) =>
+    createTelegramUiRuntime({
+      getSession: () => undefined,
+      transport,
+      getBaseUi: () => base as any,
+      getActiveChatId: () => chatId,
+    });
+
+  it("telegram answer completes the terminal prompt with the same value", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-1"));
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+      expect(base.custom).toHaveBeenCalled();
+    });
+
+    const lastCall = transport.sendButtons.mock.lastCall;
+    expect(lastCall[1]).toContain("Outside Workspace Access");
+    const allowOnceValue = lastCall[2][0][0].value; // "Allow once" (allow-file-once)
+
+    const resolved = runtime.resolveInput(chatId, decodeUiCallback(allowOnceValue), 100, true);
+    expect(resolved.handled).toBe(true);
+
+    const result = await customPromise;
+    expect(result).toBe("allow-file-once");
+  });
+
+  it("terminal answer retires the telegram side with an annotation", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-2"));
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+
+    base.resolveTerminal("allow-file-always");
+    const result = await customPromise;
+    expect(result).toBe("allow-file-always");
+
+    await vi.waitFor(() => {
+      expect(transport.removeInlineKeyboard).toHaveBeenCalled();
+      expect(transport.editText).toHaveBeenCalled();
+    });
+    expect(transport.editText.mock.lastCall[2]).toContain("Answered in terminal");
+  });
+
+  it("/stop cancel ends both surfaces with deny", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-3"));
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+
+    const cancelled = runtime.cancelPendingInput(chatId, 100);
+    expect(cancelled.handled).toBe(true);
+
+    const result = await customPromise;
+    expect(result).toBe("deny");
+  });
+
+  it("telegram timeout keeps the terminal prompt authoritative", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = mockTransport() as any;
+      const base = makeBase();
+      const runtime = makeRuntime(transport, base);
+      runtime.pushGuardrailsPrompt(pathAccessPayload("dual-4"));
+
+      const ui = runtime.create(chatId);
+      const customPromise = ui.custom<any>(() => ({} as any));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(transport.sendButtons).toHaveBeenCalled();
+
+      // Telegram input window (10 min) expires — terminal must stay pending.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 100);
+      base.resolveTerminal("allow-dir-once");
+      const result = await customPromise;
+      expect(result).toBe("allow-dir-once");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guardrails prompt closed before consumption is not rendered", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-5"));
+    runtime.closeGuardrailsPrompt({ prompt: { id: "dual-5" } });
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendText).toHaveBeenCalledWith(chatId, "📋 The agent needs input — please respond in the terminal.");
+    });
+    base.resolveTerminal(undefined);
+    const result = await customPromise;
+
+    expect(transport.sendButtons).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it("bare /stop cancels every pending flow in the chat", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-8"));
+
+    const ui = runtime.create(chatId);
+    const confirmPromise = ui.confirm("Proceed?", "Are you sure?");
+    const customPromise = ui.custom<any>(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalledTimes(2);
+    });
+    // The confirm flow's waitInput registers one microtask after its buttons
+    // resolve — flush before cancelling so both pending flows are visible.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cancelled = runtime.cancelPendingInput(chatId);
+    expect(cancelled.handled).toBe(true);
+
+    expect(await confirmPromise).toBe(false);
+    expect(await customPromise).toBe("deny");
+  });
+
+  it("host without custom rendering (RPC stub) resolves via telegram only", async () => {
+    const transport = mockTransport() as any;
+    const rpcBase = { custom: vi.fn(async () => undefined) }; // never invokes the factory
+    const runtime = makeRuntime(transport, rpcBase as any);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-7"));
+
+    const hybrid = runtime.createHybridContext(() => true);
+    expect(hybrid).toBeDefined();
+    const customPromise = hybrid!.custom(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+
+    const allowOnceValue = transport.sendButtons.mock.lastCall[2][0][0].value;
+    runtime.resolveInput(chatId, decodeUiCallback(allowOnceValue), 100, true);
+    const result = await customPromise;
+    expect(result).toBe("allow-file-once");
+  });
+
+  it("notify during a pending button prompt does not strip its keyboard", async () => {
+    const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-9"));
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+
+    ui.notify("status update");
+    expect(transport.sendText).toHaveBeenCalledWith(chatId, "<b>info</b>\nstatus update");
+    expect(transport.editText).not.toHaveBeenCalled();
+
+    const denyValue = transport.sendButtons.mock.lastCall[2][5][0].value;
+    runtime.resolveInput(chatId, decodeUiCallback(denyValue), 100, true);
+    expect(await customPromise).toBe("deny");
+  });
+
+  it("hybrid context: disconnected delegates to terminal only, connected mirrors to telegram", async () => {
+  const transport = mockTransport() as any;
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+
+    // Disconnected: pure terminal delegation, no telegram traffic.
+    const hybridOffline = runtime.createHybridContext(() => false)!;
+    const offlinePromise = hybridOffline.custom(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(base.custom).toHaveBeenCalledTimes(1);
+    });
+    base.resolveTerminal(undefined);
+    await offlinePromise;
+    expect(transport.sendButtons).not.toHaveBeenCalled();
+
+    // Connected: guardrails prompt appears in Telegram; telegram answer wins.
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-6"));
+    const hybridOnline = runtime.createHybridContext(() => true)!;
+    const customPromise = hybridOnline.custom(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+    const denyValue = transport.sendButtons.mock.lastCall[2][5][0].value; // "🚫 Deny"
+    runtime.resolveInput(chatId, decodeUiCallback(denyValue), 100, true);
+    const result = await customPromise;
+    expect(result).toBe("deny");
   });
 });

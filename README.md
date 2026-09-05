@@ -57,6 +57,7 @@ Full interactive UI components built on inline keyboards:
 - **Select** — paginated option list with Prev/Next navigation
 - **Editor** — multi-line text input prompt
 - **Custom** — routes external extension UIs (e.g. `ask_user_question`, guardrails prompts) through Telegram
+- **Synced dual-surface prompts** — while Telegram is connected, `ask_user_question` and guardrails prompts (outside-workspace access, dangerous-command confirmation) render on the terminal AND in Telegram. Answer on either surface: the terminal prompt is completed with the Telegram answer, or the Telegram buttons are retired and annotated when you answer at the laptop. This works for every turn — including continuations pi starts itself (async subagent completions, background wakes) — so a prompt never silently blocks an unattended laptop.
 
 ### 🎨 Message Rendering
 - **Rich Message API** — native Telegram markdown rendering via `sendRichText`/`editRichText`, no extra dependencies

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 (2026-09-05)
+
+- **Synced dual-surface prompts** — guardrails (`pathAccess`, `permissionGate`) and `ask_user_question` prompts now appear on the laptop terminal AND in Telegram at the same time, whenever Telegram is connected. Answer on either surface; the other side is retired automatically (the terminal prompt completes with the Telegram answer, or the Telegram buttons are removed and annotated "Answered in terminal"). This also covers prompts during turns pi starts itself — e.g. continuations after async subagent runs complete — which previously rendered only on the terminal.
+- **Robust prompt correlation** — replaced the deprecated `guardrails:action:prompted` listener and its stale single-slot capture with `guardrails:prompt:opened`/`guardrails:prompt:closed` tracking, so prompts answered elsewhere can never leak into a later Telegram rendering.
+- **`/stop` ends prompts on all surfaces** — cancelling from Telegram now resolves every pending prompt in the chat (dual-surface or Telegram-side) as deny/cancelled, including the terminal prompt.
+- **Session context on prompts** — dual prompts include the project directory name so multi-session chats are unambiguous.
+- **Host-mode preservation** — the hybrid default UI context keeps the host's extension mode (`ctx.mode === "tui"` in interactive sessions), so mode-gated extensions keep working.
+
 ## 0.1.1 (2026-08-25)
 
 - **Fix `/thinking` conflict** — removed the plugin's TUI registration of `/thinking`, which now collides with pi's built-in interactive command and produced a startup warning. `/thinking` still works in Telegram via the plugin's own command routing.

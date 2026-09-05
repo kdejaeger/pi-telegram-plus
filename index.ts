@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { basename, extname, resolve } from "node:path";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { registerTelegramAttachmentTool } from "./lib/attachments.ts";
 import { initLogger } from "./lib/logger.ts";
 import { readResolvedTelegramConfig, writeResolvedTelegramConfig } from "./lib/config.ts";
@@ -95,12 +95,39 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   const isTelegramEnabled = (): boolean => config.telegramEnabled ?? resolvedConfig?.scope !== "global";
 
   const transport = createTelegramTransport(() => config);
+  // The true TUI UI context: the terminal side of dual-surface custom() prompts.
+  // Re-captured on every session_start (fresh TUI context after /new, /reload,
+  // rebind); never overwritten while our own hybrid context is installed.
+  let baseUiContext: ExtensionUIContext | undefined;
+  let hybridContext: ExtensionUIContext | undefined;
+
   const ui = createTelegramUiRuntime({
     getSession: getActiveSession,
     transport,
+    getBaseUi: () => baseUiContext,
+    getActiveChatId: () => config.activeChatId,
+    getCwdLabel: () => basename(currentSessionCwd()),
   });
+
   const unsubJuicesharpRpivAskUserQuestionPrompt = pi.events.on("rpiv:ask-user:prompt", (data: unknown) => { ui.setJuicesharpRpivAskUserQuestionData(data); });
-  const unsubAliouPiGuardrailsPrompt = pi.events.on("guardrails:action:prompted", (data: unknown) => { ui.setAliouPiGuardrailsData(data); });
+  const unsubGuardrailsPromptOpened = pi.events.on("guardrails:prompt:opened", (data: unknown) => { ui.pushGuardrailsPrompt(data); });
+  const unsubGuardrailsPromptClosed = pi.events.on("guardrails:prompt:closed", (data: unknown) => { ui.closeGuardrailsPrompt(data); });
+
+  /** Install the hybrid default UI context (terminal-native + dual-surface custom prompts). */
+  const installHybridUi = () => {
+    const runner = getActiveSession()?.extensionRunner;
+    if (!runner) return;
+    const current = runner.getUIContext();
+    if (current !== hybridContext) baseUiContext = current;
+    const hybrid = ui.createHybridContext(() => !!config.botToken && isTelegramEnabled() && config.activeChatId !== undefined);
+    if (!hybrid) return;
+    hybridContext = hybrid;
+    // Preserve the host's extension mode ("tui" in interactive sessions) —
+    // setUIContext otherwise defaults to "print", mislabeling ctx.mode for
+    // every mode-gated extension (e.g. pi's built-in /llama).
+    const hostMode = (runner as unknown as { mode?: string }).mode;
+    (runner as unknown as { setUIContext(ui?: ExtensionUIContext, mode?: string): void }).setUIContext(hybridContext, hostMode);
+  };
 
   const heartbeat = createHeartbeat({
     getConfig: () => config,
@@ -306,7 +333,8 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   function disposeRuntime(): void {
     void polling.stop();
     unsubJuicesharpRpivAskUserQuestionPrompt();
-    unsubAliouPiGuardrailsPrompt();
+    unsubGuardrailsPromptOpened();
+    unsubGuardrailsPromptClosed();
     heartbeat.dispose();
     for (const turn of activeTurns.values()) activeTurns.delete(turn.chatId);
     ui.dispose();
@@ -316,6 +344,7 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   runtimeState.dispose = disposeRuntime;
 
   const loadConfigAndSync = async () => {
+    installHybridUi();
     try {
       switchResolvedConfig(await readResolvedTelegramConfig(currentSessionCwd()));
     } catch (error) {
