@@ -5,12 +5,20 @@ import type { CapturedAgentSession, PendingInputResolver, TelegramTransport } fr
 
 const MAX_BUTTON_TEXT = 60;
 const PAGE_SIZE = 10;
-const INPUT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Interactive prompts surfaced in Telegram (guardrails, ask_user_question,
+ * confirm/input/inputSecret/editor/select) deliberately have NO timeout:
+ * like a terminal prompt, they wait indefinitely until answered, cancelled
+ * via /stop, or retired programmatically. Stale button presses on old
+ * messages are rejected by flow-id/prompt-message validation in resolveInput
+ * — the controller replies "This prompt is no longer active." — so
+ * long-lived buttons are harmless.
+ */
 
 /** Marker for UI contexts created by this runtime (per-chat telegram contexts and the hybrid context). */
 const TELEGRAM_PLUS_UI = Symbol("pi-telegram-plus.ui");
 
-type Pending = { flowId: string; resolve: PendingInputResolver; timer: NodeJS.Timeout; sensitive: boolean; acceptsText: boolean; promptMessageId?: number };
+type Pending = { flowId: string; resolve: PendingInputResolver; sensitive: boolean; acceptsText: boolean; promptMessageId?: number };
 
 /** Outcome of a Telegram-side prompt flow. */
 type TelegramFlowResult =
@@ -74,7 +82,6 @@ export function createTelegramUiRuntime(deps: {
   };
   const clearFlow = (chatId: number, flowId: string) => {
     const map = pendingByChat.get(chatId); const pending = map?.get(flowId);
-    if (pending) clearTimeout(pending.timer);
     map?.delete(flowId);
     if (latestTextFlow.get(chatId) === flowId) latestTextFlow.delete(chatId);
     if (latestFlow.get(chatId) === flowId) latestFlow.delete(chatId);
@@ -84,8 +91,7 @@ export function createTelegramUiRuntime(deps: {
   const beginFlow = () => String(nextFlowId++);
   const waitInput = (chatId: number, flowId: string, sensitive = false, acceptsText = true, promptMessageId?: number) =>
     new Promise<string | boolean | undefined>((resolve) => {
-      const timer = setTimeout(() => { if (flows(chatId).has(flowId)) { clearFlow(chatId, flowId); resolve(undefined); } }, INPUT_TIMEOUT_MS);
-      flows(chatId).set(flowId, { flowId, resolve, timer, sensitive, acceptsText, promptMessageId });
+      flows(chatId).set(flowId, { flowId, resolve, sensitive, acceptsText, promptMessageId });
       latestFlow.set(chatId, flowId);
       if (acceptsText) latestTextFlow.set(chatId, flowId);
       deps.onPendingInputChange?.(chatId);
@@ -206,7 +212,7 @@ export function createTelegramUiRuntime(deps: {
     return rows;
   };
 
-  /** Resolve the pending waitInput of a flow from the outside (mirrors the timeout path). */
+  /** Resolve the pending waitInput of a flow from the outside (used by giveUp and /stop). */
   const abandonFlow = (chatId: number, flowId: string) => {
     const pending = flows(chatId).get(flowId);
     if (!pending) return;
@@ -403,6 +409,9 @@ export function createTelegramUiRuntime(deps: {
     };
 
     const terminalPromise: Promise<unknown> = (base.custom as any)(wrappedFactory, options);
+    // No timer: whichever side resolves first retires the other. A terminal
+    // answer or error retires Telegram via giveUp(); a Telegram /stop resolves
+    // the flow itself ("cancelled") and completes the terminal prompt instead.
     const flow = guardrailsData ? runGuardrailsTelegramFlow(chatId, guardrailsData) : runAskUserTelegramFlow(chatId, askUserData);
 
     let outcome: { source: "terminal"; value: unknown } | { source: "telegram"; r: TelegramFlowResult };
@@ -429,7 +438,8 @@ export function createTelegramUiRuntime(deps: {
         // /stop → end both surfaces with the payload's deny value.
         completeTerminal(guardrailsData ? "deny" : { answers: [], cancelled: true });
       }
-      // "gaveup" (timeout/error): the terminal prompt remains authoritative.
+      // "gaveup" (giveUp from the other surface, transport error, or dispose):
+      // the terminal prompt remains authoritative.
       return (await terminalPromise) as T;
     }
 
@@ -630,7 +640,6 @@ export function createTelegramUiRuntime(deps: {
     dispose() {
       for (const map of pendingByChat.values()) {
         for (const pending of map.values()) {
-          clearTimeout(pending.timer);
           pending.resolve(undefined);
         }
       }

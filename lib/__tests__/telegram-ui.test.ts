@@ -721,7 +721,7 @@ describe("TelegramUiRuntime dual-surface custom() prompts", () => {
     expect(result).toBe("deny");
   });
 
-  it("telegram timeout keeps the terminal prompt authoritative", async () => {
+  it("dual-surface buttons stay answerable past the legacy 10-minute window", async () => {
     vi.useFakeTimers();
     try {
       const transport = mockTransport() as any;
@@ -734,14 +734,156 @@ describe("TelegramUiRuntime dual-surface custom() prompts", () => {
       await vi.advanceTimersByTimeAsync(50);
       expect(transport.sendButtons).toHaveBeenCalled();
 
-      // Telegram input window (10 min) expires — terminal must stay pending.
+      // Prompts have no timeout: past the old 10-minute window the buttons
+      // must still be alive and pending (the user may check the phone late).
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 100);
-      base.resolveTerminal("allow-dir-once");
+      expect(transport.removeInlineKeyboard).not.toHaveBeenCalled();
+      expect(runtime.hasPendingInput(chatId)).toBe(true);
+
+      // Answering from Telegram still works long after the old window expired.
+      const allowValue = transport.sendButtons.mock.lastCall[2][0][0].value; // "Allow once" (allow-file-once)
+      const resolved = runtime.resolveInput(chatId, decodeUiCallback(allowValue), 100, true);
+      expect(resolved.handled).toBe(true);
+
       const result = await customPromise;
-      expect(result).toBe("allow-dir-once");
+      expect(result).toBe("allow-file-once");
+      expect(transport.removeInlineKeyboard).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("telegram-only prompt stays answerable past the legacy 10-minute window", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = mockTransport() as any;
+      const runtime = createTelegramUiRuntime({
+        getSession: () => undefined,
+        transport,
+        getBaseUi: () => undefined, // no terminal surface -> telegramOnlyCustom
+        getActiveChatId: () => chatId,
+      });
+      runtime.pushGuardrailsPrompt(pathAccessPayload("tgonly-1"));
+
+      const ui = runtime.create(chatId);
+      const customPromise = ui.custom<any>(() => ({} as any));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(transport.sendButtons).toHaveBeenCalled();
+
+      // Prompts never time out — even with no terminal surface, the buttons
+      // stay alive and the agent waits, exactly like a terminal prompt.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 100);
+      expect(transport.removeInlineKeyboard).not.toHaveBeenCalled();
+      expect(runtime.hasPendingInput(chatId)).toBe(true);
+
+      const allowValue = transport.sendButtons.mock.lastCall[2][0][0].value; // "Allow once" (allow-file-once)
+      const resolved = runtime.resolveInput(chatId, decodeUiCallback(allowValue), 100, true);
+      expect(resolved.handled).toBe(true);
+
+      const result = await customPromise;
+      expect(result).toBe("allow-file-once");
+      expect(transport.removeInlineKeyboard).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ask_user_question flow also stays answerable past the legacy 10-minute window", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = mockTransport() as any;
+      const base = makeBase();
+      const runtime = makeRuntime(transport, base);
+      runtime.setJuicesharpRpivAskUserQuestionData({
+        questions: [
+          {
+            question: "Which approach should we take?",
+            header: "Approach",
+            multiSelect: false,
+            options: [
+              { label: "Option A", description: "Do A" },
+              { label: "Option B", description: "Do B" },
+            ],
+          },
+        ],
+      });
+
+      const ui = runtime.create(chatId);
+      const customPromise = ui.custom<any>(() => ({} as any));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(transport.sendButtons).toHaveBeenCalled();
+
+      // No timeout: past the old window the questionnaire must still be pending.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 100);
+      expect(transport.removeInlineKeyboard).not.toHaveBeenCalled();
+      expect(runtime.hasPendingInput(chatId)).toBe(true);
+
+      const optionValue = transport.sendButtons.mock.lastCall[2][0][0].value; // "Option A" (o:0)
+      const resolved = runtime.resolveInput(chatId, decodeUiCallback(optionValue), 100, true);
+      expect(resolved.handled).toBe(true);
+
+      const result = await customPromise;
+      expect(result).toEqual({
+        answers: [{ questionIndex: 0, question: "Which approach should we take?", kind: "option", answer: "Option A" }],
+        cancelled: false,
+      });
+      expect(transport.removeInlineKeyboard).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("/stop still cancels a prompt that has waited past the legacy 10-minute window", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = mockTransport() as any;
+      const base = makeBase();
+      const runtime = makeRuntime(transport, base);
+      runtime.pushGuardrailsPrompt(pathAccessPayload("dual-6"));
+
+      const ui = runtime.create(chatId);
+      const customPromise = ui.custom<any>(() => ({} as any));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(transport.sendButtons).toHaveBeenCalled();
+
+      // After the old window the prompt is still pending, and /stop remains
+      // the escape hatch (there is no auto-expiry anymore).
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 100);
+      expect(runtime.hasPendingInput(chatId)).toBe(true);
+
+      const cancelled = runtime.cancelPendingInput(chatId, 100);
+      expect(cancelled.handled).toBe(true);
+
+      const result = await customPromise;
+      expect(result).toBe("deny");
+      expect(transport.removeInlineKeyboard).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("telegram transport failure keeps the terminal prompt authoritative", async () => {
+    const transport = mockTransport() as any;
+    transport.sendButtons.mockRejectedValueOnce(new Error("network down"));
+    const base = makeBase();
+    const runtime = makeRuntime(transport, base);
+    runtime.pushGuardrailsPrompt(pathAccessPayload("dual-7"));
+
+    const ui = runtime.create(chatId);
+    const customPromise = ui.custom<any>(() => ({} as any));
+    await vi.waitFor(() => {
+      expect(transport.sendButtons).toHaveBeenCalled();
+    });
+    // Let the flow's sendButtons rejection settle into a "gaveup" outcome.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The flow sent no message, so retirement must not touch any message.
+    expect(transport.editText).not.toHaveBeenCalled();
+    expect(transport.removeInlineKeyboard).not.toHaveBeenCalled();
+
+    base.resolveTerminal("allow-file-once");
+    const result = await customPromise;
+    expect(result).toBe("allow-file-once");
   });
 
   it("guardrails prompt closed before consumption is not rendered", async () => {
