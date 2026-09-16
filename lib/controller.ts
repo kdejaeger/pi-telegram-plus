@@ -100,19 +100,34 @@ function formatIncomingAttachmentReceipt(state: "saved" | "failed", lines: strin
 
 export type TelegramCommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
+// `mode`/`uiContext` are private on ExtensionRunner, and setUIContext always wraps
+// its argument on Pi 0.85+, so exact restore must write these fields directly.
+type RunnerUiCompat = {
+  getUIContext(): ExtensionUIContext;
+  setUIContext(ui?: ExtensionUIContext, mode?: string): void;
+  mode?: string;
+  uiContext?: ExtensionUIContext;
+};
 
 async function runWithTelegramUi<T>(deps: {
   session: CapturedAgentSession;
   ui: ExtensionUIContext;
   run: () => Promise<T>;
 }): Promise<T> {
-  const runner = deps.session.extensionRunner;
+  const runner = deps.session.extensionRunner as unknown as RunnerUiCompat;
   const previousUi = runner.getUIContext();
-  runner.setUIContext(deps.ui);
+  const previousMode = runner.mode;
+  runner.setUIContext(deps.ui, previousMode);
   try {
     return await deps.run();
   } finally {
-    runner.setUIContext(previousUi);
+    // On Pi 0.85+, extensionRunner.setUIContext always wraps its argument in
+    // wrapUIPromptContext ({ ...ui, select, confirm, ... }) and resets mode to
+    // its default of "print". Restoring through setUIContext would therefore
+    // accumulate one wrapper layer per Telegram turn and leave ctx.mode as
+    // "print" for everything else. Assign the exact previous context instead.
+    runner.uiContext = previousUi;
+    runner.mode = previousMode;
   }
 }
 

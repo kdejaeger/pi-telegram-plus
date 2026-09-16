@@ -1,8 +1,69 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { encodeUiCallback } from "../callback-protocol.ts";
 import { createTelegramUiRuntime } from "../telegram-ui.ts";
 import { parseLeadingCommand, normalizeLeadingCommand } from "../command-parser.ts";
 import { createTelegramController } from "../controller.ts";
+
+// ── Shared harness ──────────────────────────────────────────────────────────────
+
+const baseSession = (overrides: Record<string, unknown> = {}) =>
+  ({
+    prompt: async () => undefined,
+    isStreaming: false,
+    extensionRunner: {
+      getUIContext: () => undefined,
+      setUIContext: () => undefined,
+      getCommand: () => undefined,
+      createCommandContext: () => ({} as any),
+    },
+    ...overrides,
+  }) as any;
+
+const baseTransport = () => ({
+  removeInlineKeyboard: async () => undefined,
+  sendText: async () => [{ message_id: 1 }],
+  sendRichText: async () => [{ message_id: 1 }],
+  editRichText: async () => undefined,
+  sendButtons: async () => ({ message_id: 1 }),
+  editText: async () => undefined,
+  editButtons: async () => undefined,
+  answerCallbackQuery: async () => undefined,
+  deleteMessage: async () => undefined,
+  sendDocument: async () => undefined,
+  sendPhoto: async () => undefined,
+  sendChatAction: async () => undefined,
+});
+
+const baseUi = () => ({
+  create: () => ({ notify: async () => undefined }) as any,
+  resolveInput: () => ({ handled: false }),
+  isSensitiveInput: () => false,
+  hasPendingInput: () => false,
+  setJuicesharpRpivAskUserQuestionData: () => {},
+  pushGuardrailsPrompt: () => {},
+  closeGuardrailsPrompt: () => {},
+  cancelPendingInput: () => ({ handled: false }),
+  createHybridContext: () => ({}) as any,
+  dispose: async () => undefined,
+});
+
+function buildController(overrides: Record<string, unknown> = {}) {
+  return createTelegramController({
+    getSession: () => overrides.session,
+    transport: baseTransport(),
+    ui: baseUi(),
+    authorizeUser: async () => true,
+    setActiveChatId: async () => undefined,
+    getBotUsername: () => "test-bot",
+    getMessageMode: () => "queue",
+    telegramCommands: new Map(),
+    getActiveTurn: () => undefined,
+    beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
+    endTelegramTurn: () => undefined,
+    ...overrides,
+  } as any);
+}
 
 describe("parseLeadingCommand", () => {
   it("parses simple slash command", () => {
@@ -68,58 +129,12 @@ describe("normalizeLeadingCommand", () => {
 describe("createTelegramController media message behavior", () => {
   it("submits prompt for incoming document-only message", async () => {
     const prompts: string[] = [];
-    const session = {
+    const session = baseSession({
       prompt: async (text: string) => {
         prompts.push(text);
       },
-      isStreaming: false,
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({} as any),
-      },
-    } as any;
-
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: new Map(),
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
     });
+    const controller = buildController({ session });
 
     await controller.handleMessage({
       message_id: 1,
@@ -137,58 +152,12 @@ describe("createTelegramController media message behavior", () => {
 
   it("appends attachment summary to captioned message", async () => {
     const prompts: string[] = [];
-    const session = {
+    const session = baseSession({
       prompt: async (text: string) => {
         prompts.push(text);
       },
-      isStreaming: false,
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({} as any),
-      },
-    } as any;
-
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: new Map(),
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
     });
+    const controller = buildController({ session });
 
     await controller.handleMessage({
       message_id: 1,
@@ -208,69 +177,27 @@ describe("createTelegramController media message behavior", () => {
     const prompts: string[] = [];
     const sent: string[] = [];
     const saved: Array<{ fileId: string; fileName?: string; kind: string }> = [];
-    const session = {
+    const session = baseSession({
       prompt: async (text: string) => {
         prompts.push(text);
       },
-      isStreaming: false,
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({} as any),
-      },
-    } as any;
+    });
 
     const transportSendText = vi.fn(async () => [{ message_id: 1 }]);
 
-    const controller = createTelegramController({
-      getSession: () => session,
+    const controller = buildController({
+      session,
       transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async (_chatId, text) => {
+        ...baseTransport(),
+        sendText: async (_chatId: number, text: string) => {
           sent.push(text);
           return transportSendText();
         },
-        sendRichText: async (_chatId, markdown) => {
-          sent.push(markdown);
-          return [{ message_id: 1 }];
-        },
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editRichText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
       },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: new Map(),
-      getActiveTurn: () => undefined,
-      saveIncomingTelegramAttachment: async (fileId, fileName, kind) => {
+      saveIncomingTelegramAttachment: async (fileId: string, fileName: string | undefined, kind: string) => {
         saved.push({ fileId, fileName, kind });
         return `/tmp/saved/${fileId}.jpg`;
       },
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
     });
 
     await controller.handleMessage({
@@ -297,58 +224,13 @@ describe("createTelegramController media message behavior", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const session = {
+    const session = baseSession({
       prompt: async () => {
         await gate;
       },
-      isStreaming: false,
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({} as any),
-      },
-    } as any;
-
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: new Map(),
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
     });
+
+    const controller = buildController({ session });
 
     const result = await Promise.race([
       controller.handleMessage({
@@ -374,7 +256,7 @@ describe("createTelegramController media message behavior", () => {
     });
 
     const prompts: string[] = [];
-    const session: any = {
+    const session = baseSession({
       prompt: async (text: string) => {
         prompts.push(text);
         if (text === "A") {
@@ -383,55 +265,13 @@ describe("createTelegramController media message behavior", () => {
           return;
         }
       },
-      isStreaming: false,
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({} as any),
-      },
       abort: vi.fn(() => Promise.resolve()),
-    };
+    });
 
     const sendText = vi.fn(async () => [{ message_id: 1 }]);
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText,
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: new Map(),
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
+    const controller = buildController({
+      session,
+      transport: { ...baseTransport(), sendText },
     });
 
     await controller.handleMessage({
@@ -475,14 +315,7 @@ describe("createTelegramController media message behavior", () => {
     const commandStarted: { value: boolean } = { value: false };
     const commandDone: { value: boolean } = { value: false };
 
-    const session = {
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({}) as any,
-      },
-    } as any;
+    const session = baseSession();
 
     const command = new Map<string, (args: string, _ctx: any) => Promise<void>>();
     command.set("new", async () => {
@@ -491,45 +324,7 @@ describe("createTelegramController media message behavior", () => {
       commandDone.value = true;
     });
 
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: command,
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
-    });
+    const controller = buildController({ session, telegramCommands: command });
 
     const result = await Promise.race([
       controller.handleMessage({
@@ -560,14 +355,7 @@ describe("createTelegramController media message behavior", () => {
     const firstStarted: { value: boolean } = { value: false };
     const secondStarted: { value: boolean } = { value: false };
 
-    const session = {
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({}) as any,
-      },
-    } as any;
+    const session = baseSession();
 
     const command = new Map<string, (args: string, _ctx: any) => Promise<void>>();
     command.set("first", async () => {
@@ -578,45 +366,7 @@ describe("createTelegramController media message behavior", () => {
       secondStarted.value = true;
     });
 
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: command,
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
-    });
+    const controller = buildController({ session, telegramCommands: command });
 
     await controller.handleMessage({
       message_id: 1,
@@ -644,59 +394,14 @@ describe("createTelegramController media message behavior", () => {
   });
 
   it("does not crash when command handler rejects", async () => {
-    const session = {
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({}) as any,
-      },
-    } as any;
+    const session = baseSession();
 
     const command = new Map<string, (args: string, _ctx: any) => Promise<void>>();
     command.set("fail", async () => {
       throw new Error("command boom");
     });
 
-    const controller = createTelegramController({
-      getSession: () => session,
-      transport: {
-        removeInlineKeyboard: async () => undefined,
-        sendText: async () => [{ message_id: 1 }],
-        sendRichText: async () => [{ message_id: 1 }],
-        editRichText: async () => undefined,
-        sendButtons: async () => ({ message_id: 1 }),
-        editText: async () => undefined,
-        editButtons: async () => undefined,
-        answerCallbackQuery: async () => undefined,
-        deleteMessage: async () => undefined,
-        sendDocument: async () => undefined,
-        sendPhoto: async () => undefined,
-        sendChatAction: async () => undefined,
-      },
-      ui: {
-        create: () => ({
-          notify: async () => undefined,
-        }) as any,
-        resolveInput: () => ({ handled: false }),
-        isSensitiveInput: () => false,
-        hasPendingInput: () => false,
-        setJuicesharpRpivAskUserQuestionData: () => {},
-        pushGuardrailsPrompt: () => {},
-        closeGuardrailsPrompt: () => {},
-        cancelPendingInput: () => ({ handled: false }),
-        createHybridContext: () => ({}) as any,
-        dispose: async () => undefined,
-      },
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
-      telegramCommands: command,
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
-    });
+    const controller = buildController({ session, telegramCommands: command });
 
     await expect(controller.handleMessage({
       message_id: 1,
@@ -707,14 +412,7 @@ describe("createTelegramController media message behavior", () => {
 
   it("resolves ui.confirm through callback without blocking", async () => {
     const commandPrompted = { confirmed: false };
-    const session = {
-      extensionRunner: {
-        getUIContext: () => undefined,
-        setUIContext: () => undefined,
-        getCommand: () => undefined,
-        createCommandContext: () => ({}) as any,
-      },
-    } as any;
+    const session = baseSession();
 
     const sentMessageId = 77;
     const transport = {
@@ -746,18 +444,11 @@ describe("createTelegramController media message behavior", () => {
       }
     });
 
-    const controller = createTelegramController({
-      getSession: () => session,
+    const controller = buildController({
+      session,
       transport,
       ui: uiRuntime,
-      authorizeUser: async () => true,
-      setActiveChatId: async () => undefined,
-      getBotUsername: () => "test-bot",
-      getMessageMode: () => "queue",
       telegramCommands: command,
-      getActiveTurn: () => undefined,
-      beginTelegramTurn: (chatId: number, replaceMessageId?: number) => ({ chatId, queuedAttachments: [], replaceMessageId }),
-      endTelegramTurn: () => undefined,
     });
 
     const handled = await Promise.race([
@@ -782,5 +473,115 @@ describe("createTelegramController media message behavior", () => {
     expect(commandPrompted.confirmed).toBe(true);
     expect(transport.sendButtons).toHaveBeenCalledTimes(1);
     expect(transport.removeInlineKeyboard).toHaveBeenCalledWith(321, sentMessageId);
+  });
+});
+
+describe("runWithTelegramUi runner context swap/restore (Pi 0.85 compat)", () => {
+  /**
+   * Mimics the Pi 0.85.1 ExtensionRunner semantics the controller relies on:
+   * - setUIContext(ui?, mode = "print") stores a WRAPPED copy of ui (object spread)
+   *   plus the mode, as plain instance fields (private in TS, public at runtime);
+   * - getUIContext() returns that stored context.
+   *
+   * Wrapping on install is what makes the restore path observable: if the controller
+   * restored through setUIContext(previousUi), the stored context would be a fresh
+   * wrapper object, not the exact previous instance.
+   */
+  function createStatefulRunner(tuiUi: ExtensionUIContext) {
+    const state = {
+      uiContext: tuiUi as ExtensionUIContext | undefined,
+      mode: "tui" as string | undefined,
+      setCalls: [] as Array<{ ui: unknown; mode: string | undefined }>,
+    };
+    const runner = {
+      setUIContext(ui?: ExtensionUIContext, mode?: string) {
+        state.setCalls.push({ ui, mode });
+        state.uiContext = ui ? ({ ...ui, __wrapped: true } as ExtensionUIContext) : ({ __noop: true } as unknown as ExtensionUIContext);
+        state.mode = mode ?? "print"; // default-parameter semantics of Pi 0.85+
+      },
+      getUIContext() {
+        return state.uiContext as ExtensionUIContext;
+      },
+      get mode() {
+        return state.mode;
+      },
+      set mode(value: string | undefined) {
+        state.mode = value;
+      },
+      get uiContext() {
+        return state.uiContext;
+      },
+      set uiContext(value: ExtensionUIContext | undefined) {
+        state.uiContext = value;
+      },
+    };
+    return { runner, state };
+  }
+
+  function buildSwapHarness(session: unknown) {
+    let createdUi: any;
+    const controller = buildController({
+      session,
+      ui: {
+        ...baseUi(),
+        create: () => {
+          createdUi = { notify: async () => undefined, chatId: 999 } as any;
+          return createdUi;
+        },
+      },
+    });
+    return { controller, createdUi: () => createdUi };
+  }
+
+  it("installs the Telegram UI with the captured mode and restores the exact previous context directly", async () => {
+    const tuiUi = { notify: () => undefined } as any;
+    const { runner, state } = createStatefulRunner(tuiUi);
+    const { controller, createdUi } = buildSwapHarness(baseSession({ extensionRunner: runner }));
+
+    await controller.handleMessage({ message_id: 1, chat: { id: 999 }, text: "hello" });
+    // Queue mode runs the turn in the background (promptTails chain) — let it settle.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Install: exactly one setUIContext call, with the Telegram UI and the mode captured BEFORE install.
+    expect(state.setCalls).toHaveLength(1);
+    expect(state.setCalls[0].ui).toBe(createdUi());
+    expect(state.setCalls[0].mode).toBe("tui");
+    // Restore: the exact previous context object (identity), not a re-wrapped copy.
+    expect(state.uiContext).toBe(tuiUi);
+    expect(state.mode).toBe("tui");
+  });
+
+  it("does not accumulate setUIContext calls across repeated Telegram turns", async () => {
+    const tuiUi = { notify: () => undefined } as any;
+    const { runner, state } = createStatefulRunner(tuiUi);
+    const { controller } = buildSwapHarness(baseSession({ extensionRunner: runner }));
+
+    await controller.handleMessage({ message_id: 1, chat: { id: 999 }, text: "first" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await controller.handleMessage({ message_id: 2, chat: { id: 999 }, text: "second" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(state.setCalls).toHaveLength(2); // one install per turn, restore never re-wraps
+    expect(state.uiContext).toBe(tuiUi);
+    expect(state.mode).toBe("tui");
+  });
+
+  it("restores context and mode even when the turn throws", async () => {
+    const tuiUi = { notify: () => undefined } as any;
+    const { runner, state } = createStatefulRunner(tuiUi);
+    const session = baseSession({
+      extensionRunner: runner,
+      prompt: async () => {
+        throw new Error("boom");
+      },
+    });
+    const { controller } = buildSwapHarness(session);
+
+    await controller.handleMessage({ message_id: 1, chat: { id: 999 }, text: "boom turn" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(state.uiContext).toBe(tuiUi);
+    expect(state.mode).toBe("tui");
+    expect(state.setCalls).toHaveLength(1);
   });
 });
