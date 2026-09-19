@@ -66,8 +66,15 @@ export function createHeartbeat(deps: HeartbeatDeps) {
   const startStatusHeartbeat = (onHeartbeat: () => void): void => {
     if (statusTimer) return;
     statusTimer = setInterval(() => {
-      deps.ensurePollingStarted();
-      onHeartbeat();
+      // This timer outlives session replacements; a stale-ctx throw escaping a
+      // raw timer callback is an uncaughtException that kills pi. Swallow and
+      // let the next tick retry against the current session.
+      try {
+        deps.ensurePollingStarted();
+        onHeartbeat();
+      } catch {
+        // Status/typing refresh is best-effort; never crash the host.
+      }
     }, HEARTBEAT_MS);
   };
 
