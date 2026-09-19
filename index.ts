@@ -51,8 +51,14 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
   };
 
   const currentSessionCwd = (): string => {
-    const session = getActiveSession();
-    return session?.extensionRunner?.createCommandContext?.().cwd ?? process.cwd();
+    // ctx.cwd is assert-guarded and throws on a runner invalidated by session
+    // replacement (/new, /fork, /switch, /reload); fall back instead.
+    try {
+      const session = getActiveSession();
+      return session?.extensionRunner?.createCommandContext?.().cwd ?? process.cwd();
+    } catch {
+      return process.cwd();
+    }
   };
 
   const sanitizeIncomingFileName = (value: string): string => {
@@ -311,23 +317,35 @@ export default function piTelegramPlus(pi: ExtensionAPI): void {
     };
   }
 
+  // Session replacement (/new, /fork, /switch, /reload) and torn-down child sessions
+  // invalidate the captured runner; ctx.ui is assert-guarded and throws on it.
+  // refreshStatus runs on a raw 2s timer — a throw here is an uncaughtException that
+  // kills pi — so skip the TUI line; heartbeat.refreshStatus (typing) keeps running.
   function refreshStatus(error = lastStatusError): void {
     const state = buildStatusState(error);
-    const session = getActiveSession();
-    const ctx = session?.extensionRunner?.createCommandContext?.();
-    if (ctx?.ui?.setStatus) {
-      const level = config.tuiStatus ?? "full";
-      const line = formatTelegramStatusLine(ctx.ui.theme, state, level);
-      ctx.ui.setStatus(TELEGRAM_STATUS_KEY, line);
+    try {
+      const session = getActiveSession();
+      const ctx = session?.extensionRunner?.createCommandContext?.();
+      if (ctx?.ui?.setStatus) {
+        const level = config.tuiStatus ?? "full";
+        const line = formatTelegramStatusLine(ctx.ui.theme, state, level);
+        ctx.ui.setStatus(TELEGRAM_STATUS_KEY, line);
+      }
+    } catch {
+      // Stale runner: TUI status line is cosmetic; skip this update.
     }
     heartbeat.refreshStatus(state);
   }
 
   function clearStatus(): void {
     heartbeat.stopTypingOnly();
-    const session = getActiveSession();
-    const ctx = session?.extensionRunner?.createCommandContext?.();
-    if (ctx?.ui?.setStatus) clearTelegramStatus(ctx);
+    try {
+      const session = getActiveSession();
+      const ctx = session?.extensionRunner?.createCommandContext?.();
+      if (ctx?.ui?.setStatus) clearTelegramStatus(ctx);
+    } catch {
+      // Stale runner mid-teardown: the status line dies with the session anyway.
+    }
   }
 
   function disposeRuntime(): void {
